@@ -101,7 +101,7 @@ impl OpenWith {
                                 cache.insert(path, desktop_file);
                             }
                             Err(e) => {
-                                debug!("Failed to parse {path:?}: {e}");
+                                debug!("Failed to parse {}: {}", path.display(), e);
                             }
                         }
                     }

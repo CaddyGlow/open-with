@@ -32,7 +32,7 @@ pub struct DesktopFile {
 impl DesktopFile {
     pub fn parse(path: &Path) -> Result<Self> {
         let contents = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read desktop file: {path:?}"))?;
+            .with_context(|| format!("Failed to read desktop file: {}", path.display()))?;
 
         let mut main_entry = None;
         let mut actions = HashMap::new();
