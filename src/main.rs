@@ -1,0 +1,673 @@
+use anyhow::{Context, Result};
+use clap::{Parser, ValueEnum};
+use indexmap::IndexMap;
+use log::{debug, info, warn};
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::env;
+use std::fs;
+use std::io::{self, Write};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+mod desktop_parser;
+mod mime_associations;
+mod xdg;
+
+use desktop_parser::{DesktopAction, DesktopEntry, DesktopFile};
+use mime_associations::MimeAssociations;
+
+#[derive(Debug, Clone, ValueEnum, PartialEq)]
+enum FuzzyFinder {
+    Fzf,
+    Fuzzel,
+    Auto,
+}
+
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Enhanced file opener with XDG MIME support")]
+struct Args {
+    /// File to open
+    file: PathBuf,
+
+    /// Fuzzy finder to use
+    #[arg(value_enum, default_value = "auto")]
+    fuzzer: FuzzyFinder,
+
+    /// Output JSON instead of interactive mode
+    #[arg(short, long)]
+    json: bool,
+
+    /// Show desktop actions as separate entries
+    #[arg(short, long)]
+    actions: bool,
+
+    /// Clear the desktop file cache
+    #[arg(long)]
+    clear_cache: bool,
+
+    /// Verbose output
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ApplicationEntry {
+    name: String,
+    exec: String,
+    desktop_file: PathBuf,
+    comment: Option<String>,
+    icon: Option<String>,
+    is_xdg: bool,
+    xdg_priority: i32,
+    is_default: bool,
+    action_id: Option<String>,
+}
+
+#[derive(Debug)]
+struct OpenWith {
+    desktop_cache: HashMap<PathBuf, DesktopFile>,
+    mime_associations: MimeAssociations,
+    args: Args,
+}
+
+impl OpenWith {
+    fn new(args: Args) -> Result<Self> {
+        if args.clear_cache {
+            Self::clear_cache()?;
+        }
+
+        let desktop_cache = Self::load_desktop_cache()?;
+        let mime_associations = MimeAssociations::load()?;
+
+        Ok(Self {
+            desktop_cache,
+            mime_associations,
+            args,
+        })
+    }
+
+    fn cache_path() -> PathBuf {
+        dirs::cache_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join("open-with")
+            .join("desktop_cache.json")
+    }
+
+    fn clear_cache() -> Result<()> {
+        let cache_path = Self::cache_path();
+        if cache_path.exists() {
+            fs::remove_file(&cache_path)?;
+            info!("Cache cleared");
+        }
+        Ok(())
+    }
+
+    fn load_desktop_cache() -> Result<HashMap<PathBuf, DesktopFile>> {
+        let cache_path = Self::cache_path();
+
+        if cache_path.exists() {
+            // Try to load from cache
+            if let Ok(contents) = fs::read_to_string(&cache_path) {
+                if let Ok(cache) = serde_json::from_str(&contents) {
+                    debug!("Loaded desktop cache from disk");
+                    return Ok(cache);
+                }
+            }
+        }
+
+        // Build cache from scratch
+        debug!("Building desktop file cache");
+        let mut cache = HashMap::new();
+        let desktop_dirs = xdg::get_desktop_file_paths();
+
+        for dir in &desktop_dirs {
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
+                        match DesktopFile::parse(&path) {
+                            Ok(desktop_file) => {
+                                cache.insert(path, desktop_file);
+                            }
+                            Err(e) => {
+                                debug!("Failed to parse {:?}: {}", path, e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Save cache to disk
+        if let Some(parent) = cache_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        if let Ok(json) = serde_json::to_string(&cache) {
+            let _ = fs::write(&cache_path, json);
+        }
+
+        Ok(cache)
+    }
+
+    fn get_applications_for_mime(&self, mime_type: &str) -> Vec<ApplicationEntry> {
+        let mut applications = Vec::new();
+        let mut seen = HashSet::new();
+
+        // Get XDG associations first (these have priority)
+        let xdg_associations = self.mime_associations.get_associations(mime_type);
+
+        for (priority, desktop_id) in xdg_associations.iter().enumerate() {
+            if let Some((path, desktop_file)) = self.find_desktop_file(desktop_id) {
+                if seen.insert(desktop_id.clone()) {
+                    // Add main entry
+                    if let Some(entry) = &desktop_file.main_entry {
+                        applications.push(ApplicationEntry {
+                            name: entry.name.clone(),
+                            exec: entry.exec.clone(),
+                            desktop_file: path.clone(),
+                            comment: entry.comment.clone(),
+                            icon: entry.icon.clone(),
+                            is_xdg: true,
+                            xdg_priority: priority as i32,
+                            is_default: priority == 0,
+                            action_id: None,
+                        });
+
+                        // Add actions if requested
+                        if self.args.actions {
+                            for (action_id, action) in &desktop_file.actions {
+                                applications.push(ApplicationEntry {
+                                    name: format!("{} - {}", entry.name, action.name),
+                                    exec: action.exec.clone(),
+                                    desktop_file: path.clone(),
+                                    comment: Some(format!("Action: {}", action.name)),
+                                    icon: action.icon.clone().or_else(|| entry.icon.clone()),
+                                    is_xdg: true,
+                                    xdg_priority: priority as i32,
+                                    is_default: false,
+                                    action_id: Some(action_id.clone()),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add other applications that support this MIME type
+        for (path, desktop_file) in &self.desktop_cache {
+            if let Some(entry) = &desktop_file.main_entry {
+                if entry.mime_types.contains(&mime_type.to_string()) {
+                    let desktop_id = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    if seen.insert(desktop_id) {
+                        applications.push(ApplicationEntry {
+                            name: entry.name.clone(),
+                            exec: entry.exec.clone(),
+                            desktop_file: path.clone(),
+                            comment: entry.comment.clone(),
+                            icon: entry.icon.clone(),
+                            is_xdg: false,
+                            xdg_priority: -1,
+                            is_default: false,
+                            action_id: None,
+                        });
+
+                        // Add actions if requested
+                        if self.args.actions {
+                            for (action_id, action) in &desktop_file.actions {
+                                applications.push(ApplicationEntry {
+                                    name: format!("{} - {}", entry.name, action.name),
+                                    exec: action.exec.clone(),
+                                    desktop_file: path.clone(),
+                                    comment: Some(format!("Action: {}", action.name)),
+                                    icon: action.icon.clone().or_else(|| entry.icon.clone()),
+                                    is_xdg: false,
+                                    xdg_priority: -1,
+                                    is_default: false,
+                                    action_id: Some(action_id.clone()),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        applications
+    }
+
+    fn find_desktop_file(&self, desktop_id: &str) -> Option<(&PathBuf, &DesktopFile)> {
+        // First try exact match
+        for (path, desktop_file) in &self.desktop_cache {
+            if path.file_name().and_then(|n| n.to_str()) == Some(desktop_id) {
+                return Some((path, desktop_file));
+            }
+        }
+
+        // Try with path components (e.g., "org.gnome.Calculator.desktop" might be in "gnome/org.gnome.Calculator.desktop")
+        for (path, desktop_file) in &self.desktop_cache {
+            if path.to_string_lossy().ends_with(desktop_id) {
+                return Some((path, desktop_file));
+            }
+        }
+
+        None
+    }
+
+    fn run_fuzzy_finder(
+        &self,
+        applications: &[ApplicationEntry],
+        file_name: &str,
+    ) -> Result<Option<usize>> {
+        let fuzzer = match &self.args.fuzzer {
+            FuzzyFinder::Auto => {
+                if which::which("fzf").is_ok() {
+                    "fzf"
+                } else if which::which("fuzzel").is_ok() {
+                    "fuzzel"
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "No fuzzy finder found. Install fzf or fuzzel."
+                    ));
+                }
+            }
+            FuzzyFinder::Fzf => "fzf",
+            FuzzyFinder::Fuzzel => "fuzzel",
+        };
+
+        match fuzzer {
+            "fzf" => self.run_fzf(applications, file_name),
+            "fuzzel" => self.run_fuzzel(applications, file_name),
+            _ => unreachable!(),
+        }
+    }
+
+    fn run_fzf(&self, applications: &[ApplicationEntry], file_name: &str) -> Result<Option<usize>> {
+        let mut child = Command::new("fzf")
+            .arg("--prompt")
+            .arg(format!("Open '{}' with: ", file_name))
+            .arg("--height=40%")
+            .arg("--reverse")
+            .arg("--header=★=Default ▶=XDG Associated  =Available")
+            .arg("--cycle")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+
+        let stdin = child.stdin.as_mut().context("Failed to get stdin")?;
+
+        for (i, app) in applications.iter().enumerate() {
+            let marker = if app.is_default {
+                "★ "
+            } else if app.is_xdg {
+                "▶ "
+            } else {
+                "  "
+            };
+
+            let display = if let Some(comment) = &app.comment {
+                format!("{}{} - {}", marker, app.name, comment)
+            } else {
+                format!("{}{}", marker, app.name)
+            };
+
+            writeln!(stdin, "{}", display)?;
+        }
+
+        drop(stdin);
+
+        let output = child.wait_with_output()?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        // Find the matching application
+        for (i, app) in applications.iter().enumerate() {
+            let marker = if app.is_default {
+                "★ "
+            } else if app.is_xdg {
+                "▶ "
+            } else {
+                "  "
+            };
+
+            let display = if let Some(comment) = &app.comment {
+                format!("{}{} - {}", marker, app.name, comment)
+            } else {
+                format!("{}{}", marker, app.name)
+            };
+
+            if display == selected {
+                return Ok(Some(i));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn run_fuzzel(
+        &self,
+        applications: &[ApplicationEntry],
+        file_name: &str,
+    ) -> Result<Option<usize>> {
+        let mut child = Command::new("fuzzel")
+            .arg("--dmenu")
+            .arg("--prompt")
+            .arg(format!("Open '{}' with: ", file_name))
+            .arg("--index")
+            .arg("--log-level=info") // Add this to debug
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+
+        let stdin = child.stdin.as_mut().context("Failed to get stdin")?;
+
+        for app in applications {
+            let marker = if app.is_default {
+                "★"
+            } else if app.is_xdg {
+                "▶"
+            } else {
+                "   "
+            };
+
+            let display = if let Some(comment) = &app.comment {
+                // format!("{} {}, {}", marker, app.name, comment)
+                format!("{}{}", marker, app.name)
+            } else {
+                format!("{}{}", marker, app.name)
+            };
+
+            // Fuzzel format: text\0icon\n
+            if let Some(icon) = &app.icon {
+                stdin.write_all(display.as_bytes())?;
+                stdin.write_all(b"\0")?;
+                stdin.write_all(b"icon\x1f")?;
+                stdin.write_all(icon.as_bytes())?;
+                stdin.write_all(b"\n")?;
+            } else {
+                writeln!(stdin, "{}", display)?;
+            }
+        }
+
+        drop(stdin);
+
+        let output = child.wait_with_output()?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let index_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(index_str.parse().ok())
+    }
+
+    fn execute_application(&self, app: &ApplicationEntry, file_path: &Path) -> Result<()> {
+        let exec = &app.exec;
+
+        // Clean up exec command (remove field codes)
+        let clean_exec = exec
+            .replace("%u", "")
+            .replace("%U", "")
+            .replace("%f", "")
+            .replace("%F", "")
+            .replace("%i", "")
+            .replace("%c", "")
+            .replace("%k", "")
+            .replace("%%", "%")
+            .trim()
+            .to_string();
+
+        info!("Executing: {} \"{}\"", clean_exec, file_path.display());
+
+        // Parse the command
+        let parts: Vec<&str> = clean_exec.split_whitespace().collect();
+        if parts.is_empty() {
+            return Err(anyhow::anyhow!("Empty exec command"));
+        }
+
+        let mut cmd = Command::new(parts[0]);
+
+        // Add arguments
+        for part in &parts[1..] {
+            cmd.arg(part);
+        }
+
+        // Add the file path
+        cmd.arg(file_path);
+
+        // Detach from parent process
+        unsafe {
+            cmd.pre_exec(|| {
+                nix::unistd::setsid()?;
+                Ok(())
+            });
+        }
+
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("Failed to execute application")?;
+
+        Ok(())
+    }
+
+    fn output_json(
+        &self,
+        applications: &[ApplicationEntry],
+        file_path: &Path,
+        mime_type: &str,
+    ) -> Result<()> {
+        let xdg_associations: Vec<String> = self
+            .mime_associations
+            .get_associations(mime_type)
+            .into_iter()
+            .collect();
+
+        let output = serde_json::json!({
+            "file": file_path,
+            "mimetype": mime_type,
+            "xdg_associations": xdg_associations,
+            "applications": applications,
+        });
+
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        Ok(())
+    }
+
+    pub fn run(mut self) -> Result<()> {
+        let file_path = self
+            .args
+            .file
+            .canonicalize()
+            .context("Failed to resolve file path")?;
+
+        if !file_path.exists() {
+            return Err(anyhow::anyhow!("File does not exist: {:?}", file_path));
+        }
+
+        if !file_path.is_file() {
+            return Err(anyhow::anyhow!("Path is not a file: {:?}", file_path));
+        }
+
+        // Detect MIME type
+        let mime_type = mime_guess::from_path(&file_path)
+            .first_or_octet_stream()
+            .to_string();
+
+        info!("File: {:?}", file_path);
+        info!("MIME type: {}", mime_type);
+
+        let applications = self.get_applications_for_mime(&mime_type);
+
+        if applications.is_empty() {
+            return Err(anyhow::anyhow!(
+                "No applications found for MIME type: {}",
+                mime_type
+            ));
+        }
+
+        if self.args.json {
+            self.output_json(&applications, &file_path, &mime_type)?;
+        } else if atty::is(atty::Stream::Stdout) {
+            // Interactive mode
+            let file_name = file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file");
+
+            if let Some(index) = self.run_fuzzy_finder(&applications, file_name)? {
+                self.execute_application(&applications[index], &file_path)?;
+            }
+        } else {
+            // Non-interactive, non-JSON: output JSON anyway
+            self.output_json(&applications, &file_path, &mime_type)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.verbose {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    } else {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    }
+
+    let app = OpenWith::new(args)?;
+    app.run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_test_desktop_file(dir: &Path, name: &str, content: &str) -> PathBuf {
+        let file_path = dir.join(name);
+        fs::write(&file_path, content).unwrap();
+        file_path
+    }
+
+    #[test]
+    fn test_application_entry_serialization() {
+        let app = ApplicationEntry {
+            name: "Test App".to_string(),
+            exec: "test-app %F".to_string(),
+            desktop_file: PathBuf::from("/usr/share/applications/test.desktop"),
+            comment: Some("Test application".to_string()),
+            icon: Some("test-icon".to_string()),
+            is_xdg: true,
+            xdg_priority: 0,
+            is_default: true,
+            action_id: None,
+        };
+
+        let json = serde_json::to_string(&app).unwrap();
+        let deserialized: ApplicationEntry = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(app.name, deserialized.name);
+        assert_eq!(app.exec, deserialized.exec);
+        assert_eq!(app.is_default, deserialized.is_default);
+    }
+
+    #[test]
+    fn test_clean_exec_command() {
+        // This tests the exec command cleaning logic
+        let test_cases = vec![
+            ("app %f", "app"),
+            ("app %F %u", "app"),
+            ("app %%", "app %"),
+            ("app %i %c %k", "app"),
+            ("  app %f  ", "app"),
+        ];
+
+        for (input, expected) in test_cases {
+            let clean = input
+                .replace("%u", "")
+                .replace("%U", "")
+                .replace("%f", "")
+                .replace("%F", "")
+                .replace("%i", "")
+                .replace("%c", "")
+                .replace("%k", "")
+                .replace("%%", "%");
+            let clean = clean.trim();
+
+            assert_eq!(clean, expected, "Failed for input: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_fuzzy_finder_value_enum() {
+        // Since we're using clap's ValueEnum, we can test the parsing differently
+        use clap::ValueEnum;
+
+        assert_eq!(
+            FuzzyFinder::from_str("fzf", false).unwrap(),
+            FuzzyFinder::Fzf
+        );
+        assert_eq!(
+            FuzzyFinder::from_str("fuzzel", false).unwrap(),
+            FuzzyFinder::Fuzzel
+        );
+        assert_eq!(
+            FuzzyFinder::from_str("auto", false).unwrap(),
+            FuzzyFinder::Auto
+        );
+    }
+
+    #[test]
+    fn test_cache_path_creation() {
+        let cache_path = OpenWith::cache_path();
+        assert!(cache_path.ends_with("open-with/desktop_cache.json"));
+    }
+
+    #[test]
+    fn test_find_desktop_file_exact_match() {
+        let temp_dir = TempDir::new().unwrap();
+        let desktop_content = r#"[Desktop Entry]
+Name=Test
+Exec=test"#;
+
+        let file_path = create_test_desktop_file(temp_dir.path(), "test.desktop", desktop_content);
+
+        let mut cache = HashMap::new();
+        let desktop_file = DesktopFile::parse(&file_path).unwrap();
+        cache.insert(file_path.clone(), desktop_file);
+
+        let app = OpenWith {
+            desktop_cache: cache,
+            mime_associations: MimeAssociations::new(),
+            args: Args {
+                file: PathBuf::from("test.txt"),
+                fuzzer: FuzzyFinder::Auto,
+                json: false,
+                actions: false,
+                clear_cache: false,
+                verbose: false,
+            },
+        };
+
+        let result = app.find_desktop_file("test.desktop");
+        assert!(result.is_some());
+    }
+}

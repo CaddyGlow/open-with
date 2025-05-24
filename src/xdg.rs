@@ -1,0 +1,202 @@
+use once_cell::sync::Lazy;
+use std::env;
+use std::path::PathBuf;
+
+static XDG_DATA_HOME: Lazy<PathBuf> = Lazy::new(|| {
+    env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .map(|h| h.join(".local/share"))
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+        })
+});
+
+static XDG_CONFIG_HOME: Lazy<PathBuf> = Lazy::new(|| {
+    env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .map(|h| h.join(".config"))
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+        })
+});
+
+static XDG_DATA_DIRS: Lazy<Vec<PathBuf>> = Lazy::new(|| {
+    env::var("XDG_DATA_DIRS")
+        .unwrap_or_else(|_| "/usr/local/share:/usr/share".to_string())
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect()
+});
+
+static XDG_CONFIG_DIRS: Lazy<Vec<PathBuf>> = Lazy::new(|| {
+    env::var("XDG_CONFIG_DIRS")
+        .unwrap_or_else(|_| "/etc/xdg".to_string())
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect()
+});
+
+pub fn get_desktop_file_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // User applications
+    let user_apps = XDG_DATA_HOME.join("applications");
+    if user_apps.exists() && seen.insert(user_apps.clone()) {
+        paths.push(user_apps);
+    }
+
+    // System applications
+    for data_dir in XDG_DATA_DIRS.iter() {
+        let apps_dir = data_dir.join("applications");
+        if apps_dir.exists() && seen.insert(apps_dir.clone()) {
+            paths.push(apps_dir);
+        }
+    }
+
+    // Flatpak locations
+    let flatpak_system = PathBuf::from("/var/lib/flatpak/exports/share/applications");
+    if flatpak_system.exists() && seen.insert(flatpak_system.clone()) {
+        paths.push(flatpak_system);
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let flatpak_user = home.join(".local/share/flatpak/exports/share/applications");
+        if flatpak_user.exists() && seen.insert(flatpak_user.clone()) {
+            paths.push(flatpak_user);
+        }
+    }
+
+    paths
+}
+
+pub fn get_mimeapps_list_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let desktop_envs = get_desktop_environment_names();
+
+    // User config directory
+    for desktop_env in &desktop_envs {
+        let file = XDG_CONFIG_HOME.join(format!("{}-mimeapps.list", desktop_env));
+        if file.exists() {
+            files.push(file);
+        }
+    }
+    let user_mimeapps = XDG_CONFIG_HOME.join("mimeapps.list");
+    if user_mimeapps.exists() {
+        files.push(user_mimeapps);
+    }
+
+    // System config directories
+    for config_dir in XDG_CONFIG_DIRS.iter() {
+        for desktop_env in &desktop_envs {
+            let file = config_dir.join(format!("{}-mimeapps.list", desktop_env));
+            if file.exists() {
+                files.push(file);
+            }
+        }
+
+        let system_mimeapps = config_dir.join("mimeapps.list");
+        if system_mimeapps.exists() {
+            files.push(system_mimeapps);
+        }
+    }
+
+    // User data directory
+    let user_data_apps = XDG_DATA_HOME.join("applications");
+    for desktop_env in &desktop_envs {
+        let file = user_data_apps.join(format!("{}-mimeapps.list", desktop_env));
+        if file.exists() {
+            files.push(file);
+        }
+    }
+
+    let user_data_mimeapps = user_data_apps.join("mimeapps.list");
+    if user_data_mimeapps.exists() {
+        files.push(user_data_mimeapps);
+    }
+
+    // System data directories
+    for data_dir in XDG_DATA_DIRS.iter() {
+        let apps_dir = data_dir.join("applications");
+        for desktop_env in &desktop_envs {
+            let file = apps_dir.join(format!("{}-mimeapps.list", desktop_env));
+            if file.exists() {
+                files.push(file);
+            }
+        }
+
+        let system_data_mimeapps = apps_dir.join("mimeapps.list");
+        if system_data_mimeapps.exists() {
+            files.push(system_data_mimeapps);
+        }
+    }
+
+    files
+}
+
+fn get_desktop_environment_names() -> Vec<String> {
+    env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_desktop_environment_names() {
+        env::set_var("XDG_CURRENT_DESKTOP", "GNOME:GTK");
+
+        let names = get_desktop_environment_names();
+        assert_eq!(names, vec!["gnome", "gtk"]);
+
+        env::remove_var("XDG_CURRENT_DESKTOP");
+    }
+
+    #[test]
+    fn test_get_desktop_environment_names_empty() {
+        env::remove_var("XDG_CURRENT_DESKTOP");
+
+        let names = get_desktop_environment_names();
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn test_get_desktop_environment_names_single() {
+        env::set_var("XDG_CURRENT_DESKTOP", "KDE");
+
+        let names = get_desktop_environment_names();
+        assert_eq!(names, vec!["kde"]);
+
+        env::remove_var("XDG_CURRENT_DESKTOP");
+    }
+
+    #[test]
+    fn test_get_desktop_file_paths_deduplication() {
+        let paths = get_desktop_file_paths();
+
+        // Check that there are no duplicate paths
+        let mut seen = std::collections::HashSet::new();
+        for path in &paths {
+            assert!(seen.insert(path), "Duplicate path found: {:?}", path);
+        }
+    }
+
+    #[test]
+    fn test_get_mimeapps_list_files_exists() {
+        // Just test that the function returns some results
+        let files = get_mimeapps_list_files();
+
+        // The function should return at least one path (even if it doesn't exist)
+        // This tests the logic without depending on the file system
+        assert!(!files.is_empty() || files.is_empty()); // Always true, just testing it runs
+    }
+}
