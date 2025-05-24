@@ -1,0 +1,13 @@
+[alias]
+# Format and verify aliases
+fmt-all = "run --manifest-path scripts/fmt.sh"
+verify = "run --manifest-path scripts/verify.sh"
+pre-commit = "run --manifest-path scripts/verify.sh"
+
+# Quick check alias
+check-all = [
+    "fmt -- --check",
+    "clippy -- -D warnings -D clippy::all -D clippy::pedantic -A clippy::module_name_repetitions -A clippy::struct_excessive_bools",
+    "test",
+    "doc --all-features --no-deps --document-private-items",
+]
