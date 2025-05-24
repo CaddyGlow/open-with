@@ -4,7 +4,7 @@ use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Write;
+use std::io::{self, IsTerminal, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -465,7 +465,7 @@ impl OpenWith {
 
         if self.args.json {
             self.output_json(&applications, &file_path, &mime_type)?;
-        } else if atty::is(atty::Stream::Stdout) {
+        } else if io::stdout().is_terminal() {
             let file_name = file_path
                 .file_name()
                 .and_then(|n| n.to_str())
