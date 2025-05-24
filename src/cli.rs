@@ -49,7 +49,9 @@ impl Args {
     #[allow(dead_code)]
     pub fn validate(&self) -> Result<(), String> {
         if !self.build_info && !self.clear_cache && self.file.is_none() {
-            return Err("File argument is required unless using --build-info or --clear-cache".to_string());
+            return Err(
+                "File argument is required unless using --build-info or --clear-cache".to_string(),
+            );
         }
         Ok(())
     }
