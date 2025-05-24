@@ -95,9 +95,6 @@ jobs:
       - name: Run tests
         run: cargo test --verbose ${{ matrix.features }}
 
-      - name: Run doctests
-        run: cargo test --doc ${{ matrix.features }}
-
   # Job 3: Code Coverage
   coverage:
     name: Code Coverage
