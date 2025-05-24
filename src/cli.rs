@@ -16,7 +16,7 @@ pub enum FuzzyFinder {
     long_about = None
 )]
 pub struct Args {
-    /// File to open (not required when using --build-info)
+    /// File to open (not required when using --build-info or --clear-cache)
     pub file: Option<PathBuf>,
 
     /// Fuzzy finder to use
@@ -48,8 +48,8 @@ impl Args {
     /// Validate arguments and return errors for invalid combinations
     #[allow(dead_code)]
     pub fn validate(&self) -> Result<(), String> {
-        if !self.build_info && self.file.is_none() {
-            return Err("File argument is required unless using --build-info".to_string());
+        if !self.build_info && !self.clear_cache && self.file.is_none() {
+            return Err("File argument is required unless using --build-info or --clear-cache".to_string());
         }
         Ok(())
     }
@@ -137,13 +137,25 @@ mod tests {
 
     #[test]
     fn test_args_validation_missing_file() {
-        // Test missing file without --build-info should fail validation
+        // Test missing file without --build-info or --clear-cache should fail validation
         let args = Args::try_parse_from(["open-with"]).unwrap();
         assert_eq!(args.file, None);
         assert!(!args.build_info);
+        assert!(!args.clear_cache);
 
         // Should fail validation
         assert!(args.validate().is_err());
+    }
+
+    #[test]
+    fn test_args_validation_clear_cache_only() {
+        // Test --clear-cache without file should pass validation
+        let args = Args::try_parse_from(["open-with", "--clear-cache"]).unwrap();
+        assert_eq!(args.file, None);
+        assert!(args.clear_cache);
+
+        // Should pass validation
+        assert!(args.validate().is_ok());
     }
 
     #[test]

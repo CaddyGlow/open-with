@@ -429,6 +429,11 @@ impl OpenWith {
     }
 
     pub fn run(self) -> Result<()> {
+        // Handle clear-cache early if no file is provided
+        if self.args.clear_cache && self.args.file.is_none() {
+            return Ok(());
+        }
+
         let file_path = if let Some(file) = &self.args.file {
             file.canonicalize().context("Failed to resolve file path")?
         } else {
