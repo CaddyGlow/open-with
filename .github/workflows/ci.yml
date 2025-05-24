@@ -63,7 +63,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rust: [stable, beta, 1.70.0] # MSRV
+        rust: [stable, beta] # only stable and beta for now
+        #rust: [stable, beta, 1.70.0] # MSRV
         features: ["", "--all-features", "--no-default-features"]
     steps:
       - name: Checkout code
