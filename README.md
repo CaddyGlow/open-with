@@ -1,5 +1,11 @@
 # open-with
 
+[![CI](https://github.com/CaddyGlow/open-with/workflows/CI/badge.svg)](https://github.com/CaddyGlow/open-with/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/CaddyGlow/open-with/branch/main/graph/badge.svg)](https://codecov.io/gh/CaddyGlow/open-with)
+[![Crates.io](https://img.shields.io/crates/v/open-with.svg)](https://crates.io/crates/open-with)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+A modern command-line file opener for Linux that respects XDG MIME associations and provides an interactive fuzzy-finder interface for selecting applications.
 A modern command-line file opener for Linux that respects XDG MIME associations and provides an interactive fuzzy-finder interface for selecting applications.
 
 ## Features
@@ -137,7 +143,7 @@ The application follows XDG Base Directory specifications:
 
 ### Prerequisites
 
-- Rust 1.70.0 or later
+- Rust 1.80.0 or later
 - System dependencies for development:
   ```bash
   sudo apt-get install desktop-file-utils shared-mime-info xdg-utils
