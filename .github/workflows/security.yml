@@ -47,6 +47,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Update Rust and Cargo
+        run: |
+          rustup update stable
+          rustup default stable
+
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
 
@@ -69,7 +74,7 @@ jobs:
             exit 1
           fi
 
-  # License Compliance Check
+  # License Compliance Check with updated cargo-deny
   license-check:
     name: License Compliance
     runs-on: ubuntu-latest
@@ -79,6 +84,18 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Update Rust and Cargo
+        run: |
+          rustup update stable
+          rustup default stable
+
+      - name: Run cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          log-level: warn
+          command: check licenses
+          arguments: --all-features
 
       - name: Install cargo-license
         run: cargo install cargo-license
@@ -98,18 +115,6 @@ jobs:
           name: license-report
           path: license-report.md
 
-      - name: Check for incompatible licenses
-        run: |
-          # Define allowed licenses (adjust as needed)
-          ALLOWED_LICENSES="MIT|Apache-2.0|BSD-2-Clause|BSD-3-Clause|ISC|Unlicense"
-
-          if cargo license --json | jq -r '.[].license' | grep -v -E "^($ALLOWED_LICENSES)$"; then
-            echo "❌ Found incompatible licenses"
-            exit 1
-          else
-            echo "✅ All licenses are compatible"
-          fi
-
   # SBOM Generation
   sbom:
     name: Software Bill of Materials
@@ -120,6 +125,11 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Update Rust and Cargo
+        run: |
+          rustup update stable
+          rustup default stable
 
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx

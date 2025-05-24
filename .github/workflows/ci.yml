@@ -287,6 +287,12 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        # Make sure we're using a recent stable version
+
+      - name: Update Cargo
+        run: |
+          rustup update stable
+          rustup default stable
 
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
@@ -295,7 +301,7 @@ jobs:
         run: cargo audit --deny warnings
 
       - name: Run cargo deny
-        uses: EmbarkStudios/cargo-deny-action@v1
+        uses: EmbarkStudios/cargo-deny-action@v2 # Updated to v2
         with:
           log-level: warn
           command: check
