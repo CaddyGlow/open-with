@@ -180,7 +180,11 @@ mod tests {
         // Check that there are no duplicate paths
         let mut seen = std::collections::HashSet::new();
         for path in &paths {
-            assert!(seen.insert(path), "Duplicate path found: {path:?}");
+            assert!(
+                seen.insert(path),
+                "Duplicate path found: {}",
+                path.display()
+            );
         }
     }
 

@@ -50,7 +50,8 @@ jobs:
             -D clippy::all \
             -D clippy::pedantic \
             -A clippy::module_name_repetitions \
-            -A clippy::struct_excessive_bools
+            -A clippy::struct_excessive_bools \
+            -A clippy::unnecessary-debug-formatting # disable start in version 1.87
 
       - name: Check documentation
         run: cargo doc --all-features --no-deps --document-private-items

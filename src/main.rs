@@ -436,18 +436,24 @@ impl OpenWith {
         };
 
         if !file_path.exists() {
-            return Err(anyhow::anyhow!("File does not exist: {:?}", file_path));
+            return Err(anyhow::anyhow!(
+                "File does not exist: {}",
+                file_path.display()
+            ));
         }
 
         if !file_path.is_file() {
-            return Err(anyhow::anyhow!("Path is not a file: {:?}", file_path));
+            return Err(anyhow::anyhow!(
+                "Path is not a file: {}",
+                file_path.display()
+            ));
         }
 
         let mime_type = mime_guess::from_path(&file_path)
             .first_or_octet_stream()
             .to_string();
 
-        info!("File: {file_path:?}");
+        info!("File: {}", file_path.display());
         info!("MIME type: {mime_type}");
 
         let applications = self.get_applications_for_mime(&mime_type);
