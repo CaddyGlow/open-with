@@ -1,0 +1,19 @@
+# Global owners
+* @CaddyGlow
+
+# Rust source code
+src/ @CaddyGlow
+Cargo.toml @CaddyGlow
+Cargo.lock @CaddyGlow
+
+# GitHub workflows
+.github/ @CaddyGlow
+
+# Documentation
+README.md @CaddyGlow
+docs/ @CaddyGlow
+
+# Configuration files
+*.yml @CaddyGlow
+*.yaml @CaddyGlow
+*.toml @CaddyGlow

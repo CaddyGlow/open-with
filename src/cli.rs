@@ -46,6 +46,7 @@ pub struct Args {
 
 impl Args {
     /// Validate arguments and return errors for invalid combinations
+    #[allow(dead_code)]
     pub fn validate(&self) -> Result<(), String> {
         if !self.build_info && self.file.is_none() {
             return Err("File argument is required unless using --build-info".to_string());
@@ -54,6 +55,7 @@ impl Args {
     }
 
     /// Get the file path, ensuring it exists when needed
+    #[allow(dead_code)]
     pub fn get_file(&self) -> Option<&PathBuf> {
         self.file.as_ref()
     }
@@ -266,4 +268,3 @@ mod tests {
         assert_eq!(args.fuzzer, FuzzyFinder::Auto); // Should still have default
     }
 }
-
