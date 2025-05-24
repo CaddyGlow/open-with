@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use tempfile::NamedTempFile;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopEntry {
@@ -56,11 +55,11 @@ impl DesktopFile {
                 // Save previous section if needed
                 if current_section == "[Desktop Entry]" {
                     main_entry = Some(Self::build_desktop_entry(&current_fields)?);
-                } else if current_section.starts_with("[Desktop Action ") {
-                    if !current_action.is_empty() {
-                        if let Ok(action) = Self::build_desktop_action(&current_fields) {
-                            actions.insert(current_action.clone(), action);
-                        }
+                } else if current_section.starts_with("[Desktop Action ")
+                    && !current_action.is_empty()
+                {
+                    if let Ok(action) = Self::build_desktop_action(&current_fields) {
+                        actions.insert(current_action.clone(), action);
                     }
                 }
 

@@ -1,7 +1,6 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct MimeAssociations {
@@ -9,6 +8,7 @@ pub struct MimeAssociations {
 }
 
 impl MimeAssociations {
+    #![allow(dead_code)]
     pub fn new() -> Self {
         Self {
             associations: HashMap::new(),
@@ -68,7 +68,7 @@ impl MimeAssociations {
                         } else {
                             associations
                                 .entry(mime_type.to_string())
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .extend(apps);
                         }
                     }
@@ -88,8 +88,6 @@ impl MimeAssociations {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::{NamedTempFile, TempDir};
 
     #[test]
     fn test_parse_mimeapps_file_default_applications() {
@@ -101,7 +99,7 @@ image/png=viewer.desktop;
 [Added Associations]
 text/plain=extra-editor.desktop;"#;
 
-        MimeAssociations::parse_mimeapps_file(&content, &mut associations);
+        MimeAssociations::parse_mimeapps_file(content, &mut associations);
 
         // The function processes both Default and Added sections
         // Since Default Applications comes first, it sets the initial value
@@ -123,7 +121,7 @@ text/plain=extra-editor.desktop;"#;
 text/html=browser.desktop;editor.desktop;
 application/pdf=reader.desktop;"#;
 
-        MimeAssociations::parse_mimeapps_file(&content, &mut associations);
+        MimeAssociations::parse_mimeapps_file(content, &mut associations);
 
         let html_apps = associations.get("text/html").unwrap();
         assert_eq!(html_apps, &vec!["browser.desktop", "editor.desktop"]);
@@ -139,7 +137,7 @@ application/pdf=reader.desktop;"#;
 text/plain=editor.desktop;;notepad.desktop;
 image/jpeg=;"#;
 
-        MimeAssociations::parse_mimeapps_file(&content, &mut associations);
+        MimeAssociations::parse_mimeapps_file(content, &mut associations);
 
         let text_apps = associations.get("text/plain").unwrap();
         assert_eq!(text_apps, &vec!["editor.desktop", "notepad.desktop"]);
@@ -158,7 +156,7 @@ text/plain=editor.desktop;
 # Comment in the middle
 image/png=viewer.desktop;"#;
 
-        MimeAssociations::parse_mimeapps_file(&content, &mut associations);
+        MimeAssociations::parse_mimeapps_file(content, &mut associations);
 
         assert_eq!(
             associations.get("text/plain").unwrap(),

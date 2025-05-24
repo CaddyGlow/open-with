@@ -1,14 +1,10 @@
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use indexmap::IndexMap;
-use log::{debug, info, warn};
-use once_cell::sync::Lazy;
-use regex::Regex;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -17,7 +13,7 @@ mod desktop_parser;
 mod mime_associations;
 mod xdg;
 
-use desktop_parser::{DesktopAction, DesktopEntry, DesktopFile};
+use desktop_parser::DesktopFile;
 use mime_associations::MimeAssociations;
 
 #[derive(Debug, Clone, ValueEnum, PartialEq)]
@@ -306,7 +302,7 @@ impl OpenWith {
 
         let stdin = child.stdin.as_mut().context("Failed to get stdin")?;
 
-        for (i, app) in applications.iter().enumerate() {
+        for app in applications.iter() {
             let marker = if app.is_default {
                 "★ "
             } else if app.is_xdg {
@@ -324,7 +320,8 @@ impl OpenWith {
             writeln!(stdin, "{}", display)?;
         }
 
-        drop(stdin);
+        // drop(stdin);
+        // let _ = stdin;
 
         let output = child.wait_with_output()?;
 
@@ -384,7 +381,7 @@ impl OpenWith {
                 "   "
             };
 
-            let display = if let Some(comment) = &app.comment {
+            let display = if let Some(_comment) = &app.comment {
                 // format!("{} {}, {}", marker, app.name, comment)
                 format!("{}{}", marker, app.name)
             } else {
@@ -403,7 +400,7 @@ impl OpenWith {
             }
         }
 
-        drop(stdin);
+        // drop(stdin);
 
         let output = child.wait_with_output()?;
 
@@ -489,7 +486,7 @@ impl OpenWith {
         Ok(())
     }
 
-    pub fn run(mut self) -> Result<()> {
+    pub fn run(self) -> Result<()> {
         let file_path = self
             .args
             .file
