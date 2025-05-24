@@ -314,10 +314,7 @@ impl OpenWith {
         Ok(None)
     }
 
-    fn run_fuzzel(
-        applications: &[ApplicationEntry],
-        file_name: &str,
-    ) -> Result<Option<usize>> {
+    fn run_fuzzel(applications: &[ApplicationEntry], file_name: &str) -> Result<Option<usize>> {
         let mut child = Command::new("fuzzel")
             .arg("--dmenu")
             .arg("--prompt")

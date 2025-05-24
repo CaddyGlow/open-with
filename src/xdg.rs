@@ -3,21 +3,17 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 static XDG_DATA_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
-    env::var("XDG_DATA_HOME")
-        .ok()
-        .map_or_else(
-            || dirs::home_dir().map_or_else(|| PathBuf::from("/tmp"), |h| h.join(".local/share")),
-            PathBuf::from,
-        )
+    env::var("XDG_DATA_HOME").ok().map_or_else(
+        || dirs::home_dir().map_or_else(|| PathBuf::from("/tmp"), |h| h.join(".local/share")),
+        PathBuf::from,
+    )
 });
 
 static XDG_CONFIG_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
-    env::var("XDG_CONFIG_HOME")
-        .ok()
-        .map_or_else(
-            || dirs::home_dir().map_or_else(|| PathBuf::from("/tmp"), |h| h.join(".config")),
-            PathBuf::from,
-        )
+    env::var("XDG_CONFIG_HOME").ok().map_or_else(
+        || dirs::home_dir().map_or_else(|| PathBuf::from("/tmp"), |h| h.join(".config")),
+        PathBuf::from,
+    )
 });
 
 static XDG_DATA_DIRS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
