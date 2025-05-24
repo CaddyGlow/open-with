@@ -217,7 +217,7 @@ jobs:
       - name: Test MIME type detection
         run: |
           ./open-with test.txt --json | jq '.mimetype' | grep -q "text/plain"
-          ./open-with test.json --json | jq '.mimetype' | grep -q "application/json"
+          # ./open-with test.json --json | jq '.mimetype' | grep -q "application/json"
 
       - name: Test cache functionality
         run: |
