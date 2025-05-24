@@ -1,28 +1,26 @@
-use once_cell::sync::Lazy;
 use std::env;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
-static XDG_DATA_HOME: Lazy<PathBuf> = Lazy::new(|| {
+static XDG_DATA_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
     env::var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .map(|h| h.join(".local/share"))
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-        })
+        .ok()
+        .map_or_else(
+            || dirs::home_dir().map_or_else(|| PathBuf::from("/tmp"), |h| h.join(".local/share")),
+            PathBuf::from,
+        )
 });
 
-static XDG_CONFIG_HOME: Lazy<PathBuf> = Lazy::new(|| {
+static XDG_CONFIG_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
     env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .map(|h| h.join(".config"))
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-        })
+        .ok()
+        .map_or_else(
+            || dirs::home_dir().map_or_else(|| PathBuf::from("/tmp"), |h| h.join(".config")),
+            PathBuf::from,
+        )
 });
 
-static XDG_DATA_DIRS: Lazy<Vec<PathBuf>> = Lazy::new(|| {
+static XDG_DATA_DIRS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
     env::var("XDG_DATA_DIRS")
         .unwrap_or_else(|_| "/usr/local/share:/usr/share".to_string())
         .split(':')
@@ -31,7 +29,7 @@ static XDG_DATA_DIRS: Lazy<Vec<PathBuf>> = Lazy::new(|| {
         .collect()
 });
 
-static XDG_CONFIG_DIRS: Lazy<Vec<PathBuf>> = Lazy::new(|| {
+static XDG_CONFIG_DIRS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
     env::var("XDG_CONFIG_DIRS")
         .unwrap_or_else(|_| "/etc/xdg".to_string())
         .split(':')
@@ -80,7 +78,7 @@ pub fn get_mimeapps_list_files() -> Vec<PathBuf> {
 
     // User config directory
     for desktop_env in &desktop_envs {
-        let file = XDG_CONFIG_HOME.join(format!("{}-mimeapps.list", desktop_env));
+        let file = XDG_CONFIG_HOME.join(format!("{desktop_env}-mimeapps.list"));
         if file.exists() {
             files.push(file);
         }
@@ -93,7 +91,7 @@ pub fn get_mimeapps_list_files() -> Vec<PathBuf> {
     // System config directories
     for config_dir in XDG_CONFIG_DIRS.iter() {
         for desktop_env in &desktop_envs {
-            let file = config_dir.join(format!("{}-mimeapps.list", desktop_env));
+            let file = config_dir.join(format!("{desktop_env}-mimeapps.list"));
             if file.exists() {
                 files.push(file);
             }
@@ -108,7 +106,7 @@ pub fn get_mimeapps_list_files() -> Vec<PathBuf> {
     // User data directory
     let user_data_apps = XDG_DATA_HOME.join("applications");
     for desktop_env in &desktop_envs {
-        let file = user_data_apps.join(format!("{}-mimeapps.list", desktop_env));
+        let file = user_data_apps.join(format!("{desktop_env}-mimeapps.list"));
         if file.exists() {
             files.push(file);
         }
@@ -123,7 +121,7 @@ pub fn get_mimeapps_list_files() -> Vec<PathBuf> {
     for data_dir in XDG_DATA_DIRS.iter() {
         let apps_dir = data_dir.join("applications");
         for desktop_env in &desktop_envs {
-            let file = apps_dir.join(format!("{}-mimeapps.list", desktop_env));
+            let file = apps_dir.join(format!("{desktop_env}-mimeapps.list"));
             if file.exists() {
                 files.push(file);
             }
@@ -143,7 +141,7 @@ fn get_desktop_environment_names() -> Vec<String> {
         .unwrap_or_default()
         .split(':')
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_lowercase())
+        .map(str::to_lowercase)
         .collect()
 }
 
@@ -186,7 +184,7 @@ mod tests {
         // Check that there are no duplicate paths
         let mut seen = std::collections::HashSet::new();
         for path in &paths {
-            assert!(seen.insert(path), "Duplicate path found: {:?}", path);
+            assert!(seen.insert(path), "Duplicate path found: {path:?}");
         }
     }
 

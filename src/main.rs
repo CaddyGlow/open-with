@@ -50,7 +50,7 @@ impl OpenWith {
         }
 
         let desktop_cache = Self::load_desktop_cache()?;
-        let mime_associations = MimeAssociations::load()?;
+        let mime_associations = MimeAssociations::load();
 
         Ok(Self {
             desktop_cache,
@@ -101,7 +101,7 @@ impl OpenWith {
                                 cache.insert(path, desktop_file);
                             }
                             Err(e) => {
-                                debug!("Failed to parse {:?}: {}", path, e);
+                                debug!("Failed to parse {path:?}: {e}");
                             }
                         }
                     }
@@ -137,7 +137,7 @@ impl OpenWith {
                             comment: entry.comment.clone(),
                             icon: entry.icon.clone(),
                             is_xdg: true,
-                            xdg_priority: priority as i32,
+                            xdg_priority: i32::try_from(priority).unwrap_or(i32::MAX),
                             is_default: priority == 0,
                             action_id: None,
                         });
@@ -151,7 +151,7 @@ impl OpenWith {
                                     comment: Some(format!("Action: {}", action.name)),
                                     icon: action.icon.clone().or_else(|| entry.icon.clone()),
                                     is_xdg: true,
-                                    xdg_priority: priority as i32,
+                                    xdg_priority: i32::try_from(priority).unwrap_or(i32::MAX),
                                     is_default: false,
                                     action_id: Some(action_id.clone()),
                                 });
@@ -245,16 +245,16 @@ impl OpenWith {
         };
 
         match fuzzer {
-            "fzf" => self.run_fzf(applications, file_name),
-            "fuzzel" => self.run_fuzzel(applications, file_name),
+            "fzf" => Self::run_fzf(applications, file_name),
+            "fuzzel" => Self::run_fuzzel(applications, file_name),
             _ => unreachable!(),
         }
     }
 
-    fn run_fzf(&self, applications: &[ApplicationEntry], file_name: &str) -> Result<Option<usize>> {
+    fn run_fzf(applications: &[ApplicationEntry], file_name: &str) -> Result<Option<usize>> {
         let mut child = Command::new("fzf")
             .arg("--prompt")
-            .arg(format!("Open '{}' with: ", file_name))
+            .arg(format!("Open '{file_name}' with: "))
             .arg("--height=40%")
             .arg("--reverse")
             .arg("--header=★=Default ▶=XDG Associated  =Available")
@@ -265,7 +265,7 @@ impl OpenWith {
 
         let stdin = child.stdin.as_mut().context("Failed to get stdin")?;
 
-        for app in applications.iter() {
+        for app in applications {
             let marker = if app.is_default {
                 "★ "
             } else if app.is_xdg {
@@ -280,7 +280,7 @@ impl OpenWith {
                 format!("{}{}", marker, app.name)
             };
 
-            writeln!(stdin, "{}", display)?;
+            writeln!(stdin, "{display}")?;
         }
 
         let output = child.wait_with_output()?;
@@ -315,14 +315,13 @@ impl OpenWith {
     }
 
     fn run_fuzzel(
-        &self,
         applications: &[ApplicationEntry],
         file_name: &str,
     ) -> Result<Option<usize>> {
         let mut child = Command::new("fuzzel")
             .arg("--dmenu")
             .arg("--prompt")
-            .arg(format!("Open '{}' with: ", file_name))
+            .arg(format!("Open '{file_name}' with: "))
             .arg("--index")
             .arg("--log-level=info")
             .stdin(Stdio::piped())
@@ -349,7 +348,7 @@ impl OpenWith {
                 stdin.write_all(icon.as_bytes())?;
                 stdin.write_all(b"\n")?;
             } else {
-                writeln!(stdin, "{}", display)?;
+                writeln!(stdin, "{display}")?;
             }
         }
 
@@ -363,7 +362,7 @@ impl OpenWith {
         Ok(index_str.parse().ok())
     }
 
-    fn execute_application(&self, app: &ApplicationEntry, file_path: &Path) -> Result<()> {
+    fn execute_application(app: &ApplicationEntry, file_path: &Path) -> Result<()> {
         let exec = &app.exec;
 
         let clean_exec = exec
@@ -451,8 +450,8 @@ impl OpenWith {
             .first_or_octet_stream()
             .to_string();
 
-        info!("File: {:?}", file_path);
-        info!("MIME type: {}", mime_type);
+        info!("File: {file_path:?}");
+        info!("MIME type: {mime_type}");
 
         let applications = self.get_applications_for_mime(&mime_type);
 
@@ -472,7 +471,7 @@ impl OpenWith {
                 .unwrap_or("file");
 
             if let Some(index) = self.run_fuzzy_finder(&applications, file_name)? {
-                self.execute_application(&applications[index], &file_path)?;
+                Self::execute_application(&applications[index], &file_path)?;
             }
         } else {
             self.output_json(&applications, &file_path, &mime_type)?;
@@ -556,7 +555,7 @@ mod tests {
                 .replace("%%", "%");
             let clean = clean.trim();
 
-            assert_eq!(clean, expected, "Failed for input: {}", input);
+            assert_eq!(clean, expected, "Failed for input: {input}");
         }
     }
 
@@ -569,9 +568,9 @@ mod tests {
     #[test]
     fn test_find_desktop_file_exact_match() {
         let temp_dir = TempDir::new().unwrap();
-        let desktop_content = r#"[Desktop Entry]
+        let desktop_content = r"[Desktop Entry]
 Name=Test
-Exec=test"#;
+Exec=test";
 
         let file_path = create_test_desktop_file(temp_dir.path(), "test.desktop", desktop_content);
 

@@ -1,4 +1,3 @@
-use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
 
@@ -20,7 +19,7 @@ impl MimeAssociations {
     pub fn with_associations(associations: HashMap<String, Vec<String>>) -> Self {
         Self { associations }
     }
-    pub fn load() -> Result<Self> {
+    pub fn load() -> Self {
         let mut associations = HashMap::new();
         let mimeapps_files = crate::xdg::get_mimeapps_list_files();
 
@@ -31,7 +30,7 @@ impl MimeAssociations {
             }
         }
 
-        Ok(Self { associations })
+        Self { associations }
     }
 
     fn parse_mimeapps_file(contents: &str, associations: &mut HashMap<String, Vec<String>>) {
@@ -92,12 +91,12 @@ mod tests {
     #[test]
     fn test_parse_mimeapps_file_default_applications() {
         let mut associations = HashMap::new();
-        let content = r#"[Default Applications]
+        let content = r"[Default Applications]
 text/plain=editor.desktop;notepad.desktop;
 image/png=viewer.desktop;
 
 [Added Associations]
-text/plain=extra-editor.desktop;"#;
+text/plain=extra-editor.desktop;";
 
         MimeAssociations::parse_mimeapps_file(content, &mut associations);
 
@@ -117,9 +116,9 @@ text/plain=extra-editor.desktop;"#;
     #[test]
     fn test_parse_mimeapps_file_added_associations_only() {
         let mut associations = HashMap::new();
-        let content = r#"[Added Associations]
+        let content = r"[Added Associations]
 text/html=browser.desktop;editor.desktop;
-application/pdf=reader.desktop;"#;
+application/pdf=reader.desktop;";
 
         MimeAssociations::parse_mimeapps_file(content, &mut associations);
 
@@ -133,9 +132,9 @@ application/pdf=reader.desktop;"#;
     #[test]
     fn test_parse_mimeapps_file_empty_entries() {
         let mut associations = HashMap::new();
-        let content = r#"[Default Applications]
+        let content = r"[Default Applications]
 text/plain=editor.desktop;;notepad.desktop;
-image/jpeg=;"#;
+image/jpeg=;";
 
         MimeAssociations::parse_mimeapps_file(content, &mut associations);
 
@@ -149,12 +148,12 @@ image/jpeg=;"#;
     #[test]
     fn test_parse_mimeapps_file_with_comments() {
         let mut associations = HashMap::new();
-        let content = r#"# This is a comment
+        let content = r" This is a comment
 [Default Applications]
 # Another comment
 text/plain=editor.desktop;
 # Comment in the middle
-image/png=viewer.desktop;"#;
+image/png=viewer.desktop;";
 
         MimeAssociations::parse_mimeapps_file(content, &mut associations);
 

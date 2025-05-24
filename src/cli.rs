@@ -68,17 +68,17 @@ pub fn show_build_info() {
     println!("Built: {}", crate::built_info::BUILT_TIME_UTC);
 
     if let Some(hash) = crate::built_info::GIT_COMMIT_HASH {
-        println!("Commit: {}", hash);
+        println!("Commit: {hash}");
     } else {
         println!("Commit: unknown");
     }
 
     if let Some(hash_short) = crate::built_info::GIT_COMMIT_HASH_SHORT {
-        println!("Commit (short): {}", hash_short);
+        println!("Commit (short): {hash_short}");
     }
 
     if let Some(branch) = crate::built_info::GIT_HEAD_REF {
-        println!("Branch: {}", branch);
+        println!("Branch: {branch}");
     } else {
         println!("Branch: unknown");
     }
@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn test_args_parsing_with_file() {
         // Test basic file argument
-        let args = Args::try_parse_from(&["open-with", "test.txt"]).unwrap();
+        let args = Args::try_parse_from(["open-with", "test.txt"]).unwrap();
         assert_eq!(args.file, Some(PathBuf::from("test.txt")));
         assert_eq!(args.fuzzer, FuzzyFinder::Auto);
         assert!(!args.json);
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn test_args_parsing_build_info_only() {
         // Test --build-info without file
-        let args = Args::try_parse_from(&["open-with", "--build-info"]).unwrap();
+        let args = Args::try_parse_from(["open-with", "--build-info"]).unwrap();
         assert_eq!(args.file, None);
         assert!(args.build_info);
 
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_args_validation_missing_file() {
         // Test missing file without --build-info should fail validation
-        let args = Args::try_parse_from(&["open-with"]).unwrap();
+        let args = Args::try_parse_from(["open-with"]).unwrap();
         assert_eq!(args.file, None);
         assert!(!args.build_info);
 
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_args_with_all_flags() {
-        let args = Args::try_parse_from(&[
+        let args = Args::try_parse_from([
             "open-with",
             "test.txt",
             "--fuzzer",
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_short_flags() {
-        let args = Args::try_parse_from(&[
+        let args = Args::try_parse_from([
             "open-with",
             "test.txt",
             "-j", // --json
@@ -205,10 +205,10 @@ mod tests {
 
     #[test]
     fn test_get_file_method() {
-        let args_with_file = Args::try_parse_from(&["open-with", "test.txt"]).unwrap();
+        let args_with_file = Args::try_parse_from(["open-with", "test.txt"]).unwrap();
         assert_eq!(args_with_file.get_file(), Some(&PathBuf::from("test.txt")));
 
-        let args_without_file = Args::try_parse_from(&["open-with", "--build-info"]).unwrap();
+        let args_without_file = Args::try_parse_from(["open-with", "--build-info"]).unwrap();
         assert_eq!(args_without_file.get_file(), None);
     }
 
@@ -244,25 +244,25 @@ mod tests {
 
     #[test]
     fn test_fuzzer_default_value() {
-        let args = Args::try_parse_from(&["open-with", "test.txt"]).unwrap();
+        let args = Args::try_parse_from(["open-with", "test.txt"]).unwrap();
         assert_eq!(args.fuzzer, FuzzyFinder::Auto);
     }
 
     #[test]
     fn test_fuzzer_explicit_value() {
-        let args = Args::try_parse_from(&["open-with", "test.txt", "--fuzzer", "fzf"]).unwrap();
+        let args = Args::try_parse_from(["open-with", "test.txt", "--fuzzer", "fzf"]).unwrap();
         assert_eq!(args.fuzzer, FuzzyFinder::Fzf);
     }
 
     #[test]
     fn test_invalid_fuzzer_value() {
-        let result = Args::try_parse_from(&["open-with", "test.txt", "--fuzzer", "invalid"]);
+        let result = Args::try_parse_from(["open-with", "test.txt", "--fuzzer", "invalid"]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_build_info_without_other_args() {
-        let args = Args::try_parse_from(&["open-with", "--build-info"]).unwrap();
+        let args = Args::try_parse_from(["open-with", "--build-info"]).unwrap();
         assert!(args.build_info);
         assert_eq!(args.file, None);
         assert_eq!(args.fuzzer, FuzzyFinder::Auto); // Should still have default

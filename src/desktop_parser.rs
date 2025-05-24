@@ -32,7 +32,7 @@ pub struct DesktopFile {
 impl DesktopFile {
     pub fn parse(path: &Path) -> Result<Self> {
         let contents = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read desktop file: {:?}", path))?;
+            .with_context(|| format!("Failed to read desktop file: {path:?}"))?;
 
         let mut main_entry = None;
         let mut actions = HashMap::new();
@@ -115,25 +115,22 @@ impl DesktopFile {
             .map(|s| {
                 s.split(';')
                     .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect()
             })
             .unwrap_or_default();
 
         let no_display = fields
             .get("NoDisplay")
-            .map(|s| s.to_lowercase() == "true")
-            .unwrap_or(false);
+            .is_some_and(|s| s.to_lowercase() == "true");
 
         let hidden = fields
             .get("Hidden")
-            .map(|s| s.to_lowercase() == "true")
-            .unwrap_or(false);
+            .is_some_and(|s| s.to_lowercase() == "true");
 
         let terminal = fields
             .get("Terminal")
-            .map(|s| s.to_lowercase() == "true")
-            .unwrap_or(false);
+            .is_some_and(|s| s.to_lowercase() == "true");
 
         Ok(DesktopEntry {
             name,
@@ -174,17 +171,17 @@ mod tests {
 
     #[test]
     fn test_parse_simple_desktop_file() {
-        let content = r#"[Desktop Entry]
+        let content = r"[Desktop Entry]
 Name=Test App
 Exec=testapp %F
 Comment=A test application
 Icon=test-icon
 MimeType=text/plain;text/html;
 Terminal=false
-NoDisplay=false"#;
+NoDisplay=false";
 
         let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "{}", content).unwrap();
+        write!(temp_file, "{content}").unwrap();
 
         let desktop_file = DesktopFile::parse(temp_file.path()).unwrap();
         let entry = desktop_file.main_entry.unwrap();
@@ -200,7 +197,7 @@ NoDisplay=false"#;
 
     #[test]
     fn test_parse_desktop_file_with_actions() {
-        let content = r#"[Desktop Entry]
+        let content = r"[Desktop Entry]
 Name=Image Viewer
 Exec=viewer %f
 Icon=viewer
@@ -214,10 +211,10 @@ Icon=edit-icon
 
 [Desktop Action print]
 Name=Print Image
-Exec=viewer --print %f"#;
+Exec=viewer --print %f";
 
         let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "{}", content).unwrap();
+        write!(temp_file, "{content}").unwrap();
 
         let desktop_file = DesktopFile::parse(temp_file.path()).unwrap();
 
@@ -242,13 +239,13 @@ Exec=viewer --print %f"#;
 
     #[test]
     fn test_parse_desktop_file_with_no_display() {
-        let content = r#"[Desktop Entry]
+        let content = r"[Desktop Entry]
 Name=Hidden App
 Exec=hidden
-NoDisplay=true"#;
+NoDisplay=true";
 
         let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "{}", content).unwrap();
+        write!(temp_file, "{content}").unwrap();
 
         let desktop_file = DesktopFile::parse(temp_file.path()).unwrap();
         let entry = desktop_file.main_entry.unwrap();
@@ -258,11 +255,11 @@ NoDisplay=true"#;
 
     #[test]
     fn test_parse_desktop_file_missing_required_fields() {
-        let content = r#"[Desktop Entry]
-Comment=Missing name and exec"#;
+        let content = r"[Desktop Entry]
+Comment=Missing name and exec";
 
         let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "{}", content).unwrap();
+        write!(temp_file, "{content}").unwrap();
 
         let result = DesktopFile::parse(temp_file.path());
         assert!(result.is_err());
@@ -273,7 +270,7 @@ Comment=Missing name and exec"#;
         let content = "";
 
         let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "{}", content).unwrap();
+        write!(temp_file, "{content}").unwrap();
 
         let desktop_file = DesktopFile::parse(temp_file.path()).unwrap();
         assert!(desktop_file.main_entry.is_none());
@@ -282,16 +279,16 @@ Comment=Missing name and exec"#;
 
     #[test]
     fn test_parse_desktop_file_with_comments() {
-        let content = r#"# This is a comment
+        let content = r" This is a comment
 [Desktop Entry]
 # Another comment
 Name=Test App
 Exec=test
 # Comment in the middle
-Icon=test-icon"#;
+Icon=test-icon";
 
         let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "{}", content).unwrap();
+        write!(temp_file, "{content}").unwrap();
 
         let desktop_file = DesktopFile::parse(temp_file.path()).unwrap();
         let entry = desktop_file.main_entry.unwrap();
