@@ -6,7 +6,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A modern command-line file opener for Linux that respects XDG MIME associations and provides an interactive fuzzy-finder interface for selecting applications.
-A modern command-line file opener for Linux that respects XDG MIME associations and provides an interactive fuzzy-finder interface for selecting applications.
 
 ## Features
 
@@ -16,6 +15,7 @@ A modern command-line file opener for Linux that respects XDG MIME associations 
 - **Caching**: Fast desktop file parsing with intelligent caching
 - **JSON Output**: Machine-readable output for integration with other tools
 - **Build Information**: Detailed build and version information with git commit tracking
+- **Configurable Fuzzy Finders**: Customize fuzzy finder commands and arguments with template support
 
 ## Installation
 
@@ -57,17 +57,18 @@ open-with file.txt --fuzzer fzf
 Usage: open-with [OPTIONS] [FILE]
 
 Arguments:
-  [FILE]  File to open (not required when using --build-info)
+  [FILE]  File to open (not required when using --build-info or --clear-cache)
 
 Options:
-      --fuzzer <FUZZER>    Fuzzy finder to use [default: auto] [possible values: fzf, fuzzel, auto]
-  -j, --json               Output JSON instead of interactive mode
-  -a, --actions            Show desktop actions as separate entries
-      --clear-cache        Clear the desktop file cache
-  -v, --verbose            Verbose output
-      --build-info         Show build information
-  -h, --help               Print help
-  -V, --version            Print version
+      --fuzzer <FUZZER>      Fuzzy finder to use [default: auto] [possible values: fzf, fuzzel, auto]
+  -j, --json                 Output JSON instead of interactive mode
+  -a, --actions              Show desktop actions as separate entries
+      --clear-cache          Clear the desktop file cache
+  -v, --verbose              Verbose output
+      --build-info           Show build information
+      --generate-config      Generate default configuration file
+  -h, --help                 Print help
+  -V, --version              Print version
 ```
 
 ### Examples
@@ -109,6 +110,12 @@ open-with image.png --actions
 ```
 Shows both the main application entries and their available actions (edit, print, etc.).
 
+#### Generate Configuration
+```bash
+open-with --generate-config
+```
+Creates a default configuration file at `~/.config/open-with/config.toml` with customizable fuzzy finder settings.
+
 ## Dependencies
 
 ### Runtime Dependencies
@@ -128,8 +135,64 @@ The application reads standard XDG directories and files:
 The application follows XDG Base Directory specifications:
 
 - **Cache**: `~/.cache/open-with/desktop_cache.json`
-- **Config**: Reads from standard XDG config directories
+- **Config**: `~/.config/open-with/config.toml`
 - **Data**: Reads from standard XDG data directories
+
+### Configuration File
+
+Generate a default configuration file:
+
+```bash
+open-with --generate-config
+```
+
+This creates `~/.config/open-with/config.toml` with the following structure:
+
+```toml
+[fuzzy_finders.fzf]
+command = "fzf"
+args = [
+    "--prompt", "{prompt}",
+    "--height=40%",
+    "--reverse",
+    "--header={header}",
+    "--cycle"
+]
+env = {}
+
+[fuzzy_finders.fuzzel]
+command = "fuzzel"
+args = [
+    "--dmenu",
+    "--prompt", "{prompt}",
+    "--index",
+    "--log-level=info"
+]
+env = {}
+```
+
+### Template Variables
+
+The configuration supports template variables in command arguments:
+
+- `{prompt}`: Replaced with the file selection prompt (e.g., "Open 'file.txt' with: ")
+- `{header}`: Replaced with the application type indicators ("★=Default ▶=XDG Associated  =Available")
+- `{file}`: Replaced with the filename being opened
+
+### Custom Fuzzy Finders
+
+You can add custom fuzzy finder configurations:
+
+```toml
+[fuzzy_finders.rofi]
+command = "rofi"
+args = [
+    "-dmenu",
+    "-p", "{prompt}",
+    "-theme", "my-theme"
+]
+env = { "ROFI_THEME" = "custom.rasi" }
+```
 
 ### Environment Variables
 
@@ -170,6 +233,7 @@ RUST_LOG=debug cargo run -- file.txt --verbose
 The application consists of several modules:
 
 - **cli**: Command-line argument parsing and build information
+- **config**: Configuration file handling with template support
 - **desktop_parser**: Desktop entry file parsing
 - **mime_associations**: XDG MIME type association handling  
 - **xdg**: XDG Base Directory specification utilities
@@ -181,6 +245,15 @@ Desktop files are parsed once and cached to `~/.cache/open-with/desktop_cache.js
 - Cache file doesn't exist
 - Cache file is corrupted
 - `--clear-cache` flag is used
+
+### Fuzzy Finder Integration
+
+The application supports multiple fuzzy finders with configurable commands and arguments:
+
+- **Auto-detection**: Automatically detects available fuzzy finders (fzf, fuzzel)
+- **Template support**: Command arguments support template variables for dynamic content
+- **Environment variables**: Set custom environment variables for fuzzy finder execution
+- **Icon support**: Fuzzel integration includes icon display for applications
 
 ## Contributing
 
