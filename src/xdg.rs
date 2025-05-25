@@ -144,33 +144,57 @@ fn get_desktop_environment_names() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_get_desktop_environment_names() {
+        // Save original value
+        let original = env::var("XDG_CURRENT_DESKTOP").ok();
+        
         env::set_var("XDG_CURRENT_DESKTOP", "GNOME:GTK");
-
         let names = get_desktop_environment_names();
         assert_eq!(names, vec!["gnome", "gtk"]);
-
-        env::remove_var("XDG_CURRENT_DESKTOP");
+        
+        // Restore original value
+        match original {
+            Some(val) => env::set_var("XDG_CURRENT_DESKTOP", val),
+            None => env::remove_var("XDG_CURRENT_DESKTOP"),
+        }
     }
 
     #[test]
+    #[serial]
     fn test_get_desktop_environment_names_empty() {
+        // Save original value
+        let original = env::var("XDG_CURRENT_DESKTOP").ok();
+        
         env::remove_var("XDG_CURRENT_DESKTOP");
-
         let names = get_desktop_environment_names();
         assert!(names.is_empty());
+        
+        // Restore original value
+        match original {
+            Some(val) => env::set_var("XDG_CURRENT_DESKTOP", val),
+            None => env::remove_var("XDG_CURRENT_DESKTOP"),
+        }
     }
 
     #[test]
+    #[serial]
     fn test_get_desktop_environment_names_single() {
+        // Save original value
+        let original = env::var("XDG_CURRENT_DESKTOP").ok();
+        
         env::set_var("XDG_CURRENT_DESKTOP", "KDE");
-
         let names = get_desktop_environment_names();
         assert_eq!(names, vec!["kde"]);
-
-        env::remove_var("XDG_CURRENT_DESKTOP");
+        
+        // Restore original value
+        match original {
+            Some(val) => env::set_var("XDG_CURRENT_DESKTOP", val),
+            None => env::remove_var("XDG_CURRENT_DESKTOP"),
+        }
     }
 
     #[test]
