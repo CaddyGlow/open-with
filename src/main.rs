@@ -659,32 +659,30 @@ Exec=test";
     #[test]
     fn test_clear_cache() {
         use tempfile::TempDir;
-        
+
         // Create a temporary directory for the cache
         let temp_dir = TempDir::new().unwrap();
         let cache_dir = temp_dir.path().join("open-with");
         fs::create_dir_all(&cache_dir).unwrap();
-        
+
         // Create a mock cache file
         let cache_file = cache_dir.join("desktop_cache.json");
         fs::write(&cache_file, "test cache").unwrap();
-        
+
         // Verify file exists
         assert!(cache_file.exists());
-        
+
         // Clear the specific cache file
         if cache_file.exists() {
             fs::remove_file(&cache_file).unwrap();
         }
-        
+
         // Verify cache file is removed
         assert!(!cache_file.exists());
     }
 
     #[test]
     fn test_output_json() {
-        use std::io::Cursor;
-        
         let args = Args {
             file: Some(PathBuf::from("test.txt")),
             fuzzer: FuzzyFinder::Auto,
@@ -701,19 +699,17 @@ Exec=test";
             args,
         };
 
-        let applications = vec![
-            ApplicationEntry {
-                name: "Test App".to_string(),
-                exec: "test-app %F".to_string(),
-                desktop_file: PathBuf::from("/usr/share/applications/test.desktop"),
-                comment: Some("Test application".to_string()),
-                icon: Some("test-icon".to_string()),
-                is_xdg: true,
-                xdg_priority: 0,
-                is_default: true,
-                action_id: None,
-            },
-        ];
+        let applications = vec![ApplicationEntry {
+            name: "Test App".to_string(),
+            exec: "test-app %F".to_string(),
+            desktop_file: PathBuf::from("/usr/share/applications/test.desktop"),
+            comment: Some("Test application".to_string()),
+            icon: Some("test-icon".to_string()),
+            is_xdg: true,
+            xdg_priority: 0,
+            is_default: true,
+            action_id: None,
+        }];
 
         let file_path = PathBuf::from("test.txt");
         let mime_type = "text/plain";
@@ -766,21 +762,24 @@ Exec=test";
 
         let result = app.run();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to resolve file path"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to resolve file path"));
     }
 
     #[test]
     fn test_run_clear_cache_only() {
         use tempfile::TempDir;
-        
+
         // Create a temporary directory for the cache
         let temp_dir = TempDir::new().unwrap();
         let cache_dir = temp_dir.path().join("open-with");
         fs::create_dir_all(&cache_dir).unwrap();
-        
+
         // Override the cache path for this test
         std::env::set_var("HOME", temp_dir.path());
-        
+
         let args = Args {
             file: None,
             fuzzer: FuzzyFinder::Auto,
@@ -795,7 +794,7 @@ Exec=test";
         let app = OpenWith::new(args).unwrap();
         let result = app.run();
         assert!(result.is_ok());
-        
+
         // Restore HOME
         std::env::remove_var("HOME");
     }
@@ -827,7 +826,7 @@ Exec=testapp --print %F";
             file: Some(PathBuf::from("test.txt")),
             fuzzer: FuzzyFinder::Auto,
             json: false,
-            actions: true,  // Enable actions
+            actions: true, // Enable actions
             clear_cache: false,
             verbose: false,
             build_info: false,
@@ -840,25 +839,31 @@ Exec=testapp --print %F";
         };
 
         let apps = app.get_applications_for_mime("text/plain");
-        
+
         // Should have main entry + 2 actions = 3 total
         assert_eq!(apps.len(), 3);
-        
+
         // Check main entry
         assert_eq!(apps[0].name, "Test App");
         assert!(apps[0].action_id.is_none());
-        
+
         // Check actions - order might vary, so check both possibilities
         let action_names: Vec<&str> = apps[1..].iter().map(|a| a.name.as_str()).collect();
         assert!(action_names.contains(&"Test App - Edit"));
         assert!(action_names.contains(&"Test App - Print"));
-        
+
         // Find the edit action
-        let edit_action = apps.iter().find(|a| a.action_id == Some("edit".to_string())).unwrap();
+        let edit_action = apps
+            .iter()
+            .find(|a| a.action_id == Some("edit".to_string()))
+            .unwrap();
         assert_eq!(edit_action.name, "Test App - Edit");
-        
+
         // Find the print action
-        let print_action = apps.iter().find(|a| a.action_id == Some("print".to_string())).unwrap();
+        let print_action = apps
+            .iter()
+            .find(|a| a.action_id == Some("print".to_string()))
+            .unwrap();
         assert_eq!(print_action.name, "Test App - Print");
     }
 }
