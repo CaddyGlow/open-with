@@ -49,7 +49,7 @@ impl OpenWith {
             Self::clear_cache()?;
         }
 
-        let desktop_cache = Self::load_desktop_cache()?;
+        let desktop_cache = Self::load_desktop_cache();
         let mime_associations = MimeAssociations::load();
 
         Ok(Self {
@@ -77,7 +77,7 @@ impl OpenWith {
         Ok(())
     }
 
-    fn load_desktop_cache() -> Result<HashMap<PathBuf, DesktopFile>> {
+    fn load_desktop_cache() -> HashMap<PathBuf, DesktopFile> {
         let cache_path = Self::cache_path();
 
         // Try to load from cache if it exists
@@ -86,7 +86,7 @@ impl OpenWith {
                 if let Ok(cache) = serde_json::from_str::<HashMap<PathBuf, DesktopFile>>(&contents)
                 {
                     debug!("Loaded desktop cache from disk");
-                    return Ok(cache);
+                    return cache;
                 }
             }
         }
@@ -129,8 +129,8 @@ impl OpenWith {
             }
         }
 
-        // Always return Ok with whatever we found (even if empty)
-        Ok(cache)
+        // Always return with whatever we found (even if empty)
+        cache
     }
 
     fn get_applications_for_mime(&self, mime_type: &str) -> Vec<ApplicationEntry> {
