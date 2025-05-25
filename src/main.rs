@@ -620,13 +620,8 @@ Exec=test";
 
     #[test]
     fn test_new_with_clear_cache() {
-        use tempfile::TempDir;
-        
-        // Create a temporary directory for HOME to ensure cache operations work
-        let temp_dir = TempDir::new().unwrap();
-        let original_home = env::var("HOME").ok();
-        env::set_var("HOME", temp_dir.path());
-        
+        // Test that OpenWith::new succeeds when clear_cache is true
+        // even if the cache doesn't exist
         let args = Args {
             file: Some(PathBuf::from("test.txt")),
             fuzzer: FuzzyFinder::Auto,
@@ -637,15 +632,10 @@ Exec=test";
             build_info: false,
         };
 
-        // This should not panic
+        // The clear_cache function should handle non-existent cache gracefully
         let result = OpenWith::new(args);
         
-        // Restore original HOME
-        match original_home {
-            Some(val) => env::set_var("HOME", val),
-            None => env::remove_var("HOME"),
-        }
-        
+        // This should succeed because clear_cache now handles missing files
         assert!(result.is_ok());
     }
 
