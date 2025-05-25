@@ -653,4 +653,182 @@ Exec=test";
         let apps = app.get_applications_for_mime("application/unknown");
         assert!(apps.is_empty());
     }
+
+    #[test]
+    fn test_clear_cache() {
+        // Create a temporary cache file
+        let cache_path = OpenWith::cache_path();
+        if let Some(parent) = cache_path.parent() {
+            fs::create_dir_all(parent).ok();
+        }
+        fs::write(&cache_path, "test cache").ok();
+        
+        // Clear cache
+        let result = OpenWith::clear_cache();
+        assert!(result.is_ok());
+        
+        // Verify cache file is removed
+        assert!(!cache_path.exists());
+    }
+
+    #[test]
+    fn test_output_json() {
+        use std::io::Cursor;
+        
+        let args = Args {
+            file: Some(PathBuf::from("test.txt")),
+            fuzzer: FuzzyFinder::Auto,
+            json: true,
+            actions: false,
+            clear_cache: false,
+            verbose: false,
+            build_info: false,
+        };
+
+        let app = OpenWith {
+            desktop_cache: HashMap::new(),
+            mime_associations: MimeAssociations::new(),
+            args,
+        };
+
+        let applications = vec![
+            ApplicationEntry {
+                name: "Test App".to_string(),
+                exec: "test-app %F".to_string(),
+                desktop_file: PathBuf::from("/usr/share/applications/test.desktop"),
+                comment: Some("Test application".to_string()),
+                icon: Some("test-icon".to_string()),
+                is_xdg: true,
+                xdg_priority: 0,
+                is_default: true,
+                action_id: None,
+            },
+        ];
+
+        let file_path = PathBuf::from("test.txt");
+        let mime_type = "text/plain";
+
+        // This will print to stdout, but we're mainly testing it doesn't panic
+        let result = app.output_json(&applications, &file_path, mime_type);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_with_no_file() {
+        let args = Args {
+            file: None,
+            fuzzer: FuzzyFinder::Auto,
+            json: false,
+            actions: false,
+            clear_cache: false,
+            verbose: false,
+            build_info: false,
+        };
+
+        let app = OpenWith {
+            desktop_cache: HashMap::new(),
+            mime_associations: MimeAssociations::new(),
+            args,
+        };
+
+        let result = app.run();
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "No file provided");
+    }
+
+    #[test]
+    fn test_run_with_nonexistent_file() {
+        let args = Args {
+            file: Some(PathBuf::from("/nonexistent/file.txt")),
+            fuzzer: FuzzyFinder::Auto,
+            json: false,
+            actions: false,
+            clear_cache: false,
+            verbose: false,
+            build_info: false,
+        };
+
+        let app = OpenWith {
+            desktop_cache: HashMap::new(),
+            mime_associations: MimeAssociations::new(),
+            args,
+        };
+
+        let result = app.run();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Failed to resolve file path"));
+    }
+
+    #[test]
+    fn test_run_clear_cache_only() {
+        let args = Args {
+            file: None,
+            fuzzer: FuzzyFinder::Auto,
+            json: false,
+            actions: false,
+            clear_cache: true,
+            verbose: false,
+            build_info: false,
+        };
+
+        let app = OpenWith::new(args).unwrap();
+        let result = app.run();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_applications_for_mime_with_actions() {
+        let temp_dir = TempDir::new().unwrap();
+        let desktop_content = r"[Desktop Entry]
+Name=Test App
+Exec=testapp %F
+MimeType=text/plain;
+Actions=edit;print;
+
+[Desktop Action edit]
+Name=Edit
+Exec=testapp --edit %F
+
+[Desktop Action print]
+Name=Print
+Exec=testapp --print %F";
+
+        let file_path = create_test_desktop_file(temp_dir.path(), "test.desktop", desktop_content);
+
+        let mut cache = HashMap::new();
+        let desktop_file = DesktopFile::parse(&file_path).unwrap();
+        cache.insert(file_path.clone(), desktop_file);
+
+        let args = Args {
+            file: Some(PathBuf::from("test.txt")),
+            fuzzer: FuzzyFinder::Auto,
+            json: false,
+            actions: true,  // Enable actions
+            clear_cache: false,
+            verbose: false,
+            build_info: false,
+        };
+
+        let app = OpenWith {
+            desktop_cache: cache,
+            mime_associations: MimeAssociations::new(),
+            args,
+        };
+
+        let apps = app.get_applications_for_mime("text/plain");
+        
+        // Should have main entry + 2 actions = 3 total
+        assert_eq!(apps.len(), 3);
+        
+        // Check main entry
+        assert_eq!(apps[0].name, "Test App");
+        assert!(apps[0].action_id.is_none());
+        
+        // Check actions
+        assert_eq!(apps[1].name, "Test App - Edit");
+        assert_eq!(apps[1].action_id, Some("edit".to_string()));
+        
+        assert_eq!(apps[2].name, "Test App - Print");
+        assert_eq!(apps[2].action_id, Some("print".to_string()));
+    }
 }

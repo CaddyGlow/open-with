@@ -281,4 +281,21 @@ mod tests {
         assert_eq!(args.file, None);
         assert_eq!(args.fuzzer, FuzzyFinder::Auto); // Should still have default
     }
+
+    #[test]
+    fn test_show_build_info() {
+        // Capture stdout to test the function
+        use std::io::Cursor;
+        use std::sync::Mutex;
+        
+        // This test just ensures the function runs without panicking
+        // We can't easily test the output without mocking stdout
+        show_build_info();
+        
+        // Verify that build constants exist and are accessible
+        assert!(!crate::built_info::PKG_VERSION.is_empty());
+        assert!(!crate::built_info::TARGET.is_empty());
+        assert!(!crate::built_info::RUSTC_VERSION.is_empty());
+        assert!(!crate::built_info::PROFILE.is_empty());
+    }
 }
