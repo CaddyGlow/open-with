@@ -3,11 +3,21 @@
 fmt-all = "run --manifest-path scripts/fmt.sh"
 verify = "run --manifest-path scripts/verify.sh"
 pre-commit = "run --manifest-path scripts/verify.sh"
+coverage = "run --manifest-path scripts/coverage.sh"
 
 # Quick check alias
 check-all = [
     "fmt -- --check",
-    "clippy -- -D warnings -D clippy::all -D clippy::pedantic -A clippy::module_name_repetitions -A clippy::struct_excessive_bools",
+    "clippy -- -D warnings -D clippy::all -D clippy::pedantic -A clippy::module_name_repetitions -A clippy::struct_excessive_bools -A clippy::unnecessary-debug-formatting",
     "test",
     "doc --all-features --no-deps --document-private-items",
+]
+
+# Full check with coverage
+check-full = [
+    "fmt -- --check",
+    "clippy -- -D warnings -D clippy::all -D clippy::pedantic -A clippy::module_name_repetitions -A clippy::struct_excessive_bools -A clippy::unnecessary-debug-formatting",
+    "test",
+    "doc --all-features --no-deps --document-private-items",
+    "run --manifest-path scripts/coverage.sh",
 ]
