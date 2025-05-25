@@ -77,8 +77,7 @@ impl OpenWith {
         Ok(())
     }
 
-    fn load_desktop_cache(
-    ) -> std::collections::HashMap<std::path::PathBuf, desktop_parser::DesktopFile> {
+    fn load_desktop_cache() -> Result<HashMap<PathBuf, DesktopFile>> {
         let cache_path = Self::cache_path();
 
         // Try to load from cache if it exists
@@ -130,6 +129,7 @@ impl OpenWith {
         }
 
         // Always return Ok with whatever we found (even if empty)
+        Ok(cache)
     }
 
     fn get_applications_for_mime(&self, mime_type: &str) -> Vec<ApplicationEntry> {
