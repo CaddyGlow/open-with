@@ -83,7 +83,8 @@ impl OpenWith {
         // Try to load from cache if it exists
         if cache_path.exists() {
             if let Ok(contents) = fs::read_to_string(&cache_path) {
-                if let Ok(cache) = serde_json::from_str::<HashMap<PathBuf, DesktopFile>>(&contents) {
+                if let Ok(cache) = serde_json::from_str::<HashMap<PathBuf, DesktopFile>>(&contents)
+                {
                     debug!("Loaded desktop cache from disk");
                     return Ok(cache);
                 }
