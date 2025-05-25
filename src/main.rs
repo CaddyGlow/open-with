@@ -80,6 +80,7 @@ impl OpenWith {
     fn load_desktop_cache() -> Result<HashMap<PathBuf, DesktopFile>> {
         let cache_path = Self::cache_path();
 
+        // Try to load from cache if it exists
         if cache_path.exists() {
             if let Ok(contents) = fs::read_to_string(&cache_path) {
                 if let Ok(cache) = serde_json::from_str(&contents) {
@@ -91,9 +92,12 @@ impl OpenWith {
 
         debug!("Building desktop file cache");
         let mut cache = HashMap::new();
+        
+        // Get desktop directories, but handle gracefully if none exist
         let desktop_dirs = xdg::get_desktop_file_paths();
-
+        
         for dir in &desktop_dirs {
+            // Skip directories that don't exist or can't be read
             if let Ok(entries) = fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -108,6 +112,8 @@ impl OpenWith {
                         }
                     }
                 }
+            } else {
+                debug!("Cannot read directory: {}", dir.display());
             }
         }
 
@@ -122,6 +128,7 @@ impl OpenWith {
             }
         }
 
+        // Always return Ok with whatever we found (even if empty)
         Ok(cache)
     }
 
@@ -624,7 +631,7 @@ Exec=test";
     #[test]
     fn test_new_with_clear_cache() {
         // Test that OpenWith::new succeeds when clear_cache is true
-        // even if the cache doesn't exist
+        // This should work even in environments with no desktop files
         let args = Args {
             file: Some(PathBuf::from("test.txt")),
             fuzzer: FuzzyFinder::Auto,
@@ -635,11 +642,25 @@ Exec=test";
             build_info: false,
         };
 
-        // The clear_cache function should handle non-existent cache gracefully
+        // Initialize env_logger for debugging if test fails
+        let _ = env_logger::builder()
+            .is_test(true)
+            .filter_level(log::LevelFilter::Debug)
+            .try_init();
+
+        // The function should succeed even if:
+        // 1. No cache exists to clear
+        // 2. No desktop directories exist
+        // 3. Cache directory can't be created
         let result = OpenWith::new(args);
         
-        // This should succeed because clear_cache now handles missing files
-        assert!(result.is_ok());
+        // If it fails, print the error for debugging
+        if let Err(ref e) = result {
+            eprintln!("OpenWith::new failed with error: {}", e);
+            eprintln!("Error chain: {:?}", e);
+        }
+        
+        assert!(result.is_ok(), "OpenWith::new should handle missing cache and desktop files gracefully");
     }
 
     #[test]
