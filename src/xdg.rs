@@ -151,11 +151,11 @@ mod tests {
     fn test_get_desktop_environment_names() {
         // Save original value
         let original = env::var("XDG_CURRENT_DESKTOP").ok();
-        
+
         env::set_var("XDG_CURRENT_DESKTOP", "GNOME:GTK");
         let names = get_desktop_environment_names();
         assert_eq!(names, vec!["gnome", "gtk"]);
-        
+
         // Restore original value
         match original {
             Some(val) => env::set_var("XDG_CURRENT_DESKTOP", val),
@@ -168,11 +168,11 @@ mod tests {
     fn test_get_desktop_environment_names_empty() {
         // Save original value
         let original = env::var("XDG_CURRENT_DESKTOP").ok();
-        
+
         env::remove_var("XDG_CURRENT_DESKTOP");
         let names = get_desktop_environment_names();
         assert!(names.is_empty());
-        
+
         // Restore original value
         match original {
             Some(val) => env::set_var("XDG_CURRENT_DESKTOP", val),
@@ -185,11 +185,11 @@ mod tests {
     fn test_get_desktop_environment_names_single() {
         // Save original value
         let original = env::var("XDG_CURRENT_DESKTOP").ok();
-        
+
         env::set_var("XDG_CURRENT_DESKTOP", "KDE");
         let names = get_desktop_environment_names();
         assert_eq!(names, vec!["kde"]);
-        
+
         // Restore original value
         match original {
             Some(val) => env::set_var("XDG_CURRENT_DESKTOP", val),
@@ -229,7 +229,7 @@ mod tests {
         let _ = &*XDG_CONFIG_HOME;
         let _ = &*XDG_DATA_DIRS;
         let _ = &*XDG_CONFIG_DIRS;
-        
+
         // Verify they return reasonable values
         assert!(!XDG_DATA_DIRS.is_empty());
         assert!(!XDG_CONFIG_DIRS.is_empty());
@@ -240,20 +240,20 @@ mod tests {
     fn test_xdg_paths_with_env_vars() {
         // This test can't modify the lazy statics after they're initialized
         // Instead, let's test the functions that use environment variables directly
-        
+
         // Save original values
         let orig_desktop = env::var("XDG_CURRENT_DESKTOP").ok();
-        
+
         // Test get_desktop_environment_names with different values
         env::set_var("XDG_CURRENT_DESKTOP", "TEST:DESKTOP");
         let names = get_desktop_environment_names();
         assert_eq!(names, vec!["test", "desktop"]);
-        
+
         // Test get_mimeapps_list_files - it should return paths based on current env
         let files = get_mimeapps_list_files();
         // Just verify it returns some paths
         assert!(!files.is_empty() || files.is_empty()); // Always true, just testing it runs
-        
+
         // Restore original value
         match orig_desktop {
             Some(val) => env::set_var("XDG_CURRENT_DESKTOP", val),

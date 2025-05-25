@@ -334,7 +334,10 @@ Terminal=true";
     fn test_parse_invalid_file_path() {
         let result = DesktopFile::parse(Path::new("/nonexistent/file.desktop"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to read desktop file"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to read desktop file"));
     }
 
     #[test]
@@ -351,10 +354,10 @@ Name=Broken Action";
         write!(temp_file, "{content}").unwrap();
 
         let desktop_file = DesktopFile::parse(temp_file.path()).unwrap();
-        
+
         // Main entry should parse fine
         assert!(desktop_file.main_entry.is_some());
-        
+
         // Action without Exec should not be included
         assert!(!desktop_file.actions.contains_key("broken"));
     }
