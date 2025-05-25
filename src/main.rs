@@ -69,8 +69,10 @@ impl OpenWith {
     fn clear_cache() -> Result<()> {
         let cache_path = Self::cache_path();
         if cache_path.exists() {
-            fs::remove_file(&cache_path)?;
+            fs::remove_file(&cache_path).context("Failed to remove cache file")?;
             info!("Cache cleared");
+        } else {
+            info!("No cache to clear");
         }
         Ok(())
     }
