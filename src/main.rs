@@ -512,6 +512,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use std::fs;
     use tempfile::TempDir;
 
@@ -619,6 +620,13 @@ Exec=test";
 
     #[test]
     fn test_new_with_clear_cache() {
+        use tempfile::TempDir;
+        
+        // Create a temporary directory for HOME to ensure cache operations work
+        let temp_dir = TempDir::new().unwrap();
+        let original_home = env::var("HOME").ok();
+        env::set_var("HOME", temp_dir.path());
+        
         let args = Args {
             file: Some(PathBuf::from("test.txt")),
             fuzzer: FuzzyFinder::Auto,
@@ -631,6 +639,13 @@ Exec=test";
 
         // This should not panic
         let result = OpenWith::new(args);
+        
+        // Restore original HOME
+        match original_home {
+            Some(val) => env::set_var("HOME", val),
+            None => env::remove_var("HOME"),
+        }
+        
         assert!(result.is_ok());
     }
 
