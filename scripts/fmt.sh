@@ -15,7 +15,7 @@ cargo fmt
 
 # Run clippy with auto-fix where possible
 echo -e "${YELLOW}🔧 Running clippy fixes...${NC}"
-cargo clippy --fix --allow-dirty --allow-staged -- -D warnings -D clippy::all -D clippy::pedantic -A clippy::module_name_repetitions -A clippy::struct_excessive_bools || true
+cargo clippy --fix --allow-dirty --allow-staged -- -D warnings -D clippy::all -D clippy::pedantic -A clippy::module_name_repetitions -A clippy::struct_excessive_bools -A clippy::unnecessary-debug-formatting || true
 
 # Format again in case clippy made changes
 cargo fmt
