@@ -111,12 +111,15 @@ impl OpenWith {
             }
         }
 
+        // Try to save cache, but don't fail if we can't
         if let Some(parent) = cache_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        if let Ok(json) = serde_json::to_string(&cache) {
-            let _ = fs::write(&cache_path, json);
+            if let Err(e) = fs::create_dir_all(parent) {
+                debug!("Failed to create cache directory: {}", e);
+            } else if let Ok(json) = serde_json::to_string(&cache) {
+                if let Err(e) = fs::write(&cache_path, json) {
+                    debug!("Failed to write cache file: {}", e);
+                }
+            }
         }
 
         Ok(cache)
