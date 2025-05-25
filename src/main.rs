@@ -77,7 +77,8 @@ impl OpenWith {
         Ok(())
     }
 
-    fn load_desktop_cache() -> Result<HashMap<PathBuf, DesktopFile>> {
+    fn load_desktop_cache(
+    ) -> std::collections::HashMap<std::path::PathBuf, desktop_parser::DesktopFile> {
         let cache_path = Self::cache_path();
 
         // Try to load from cache if it exists
@@ -85,17 +86,17 @@ impl OpenWith {
             if let Ok(contents) = fs::read_to_string(&cache_path) {
                 if let Ok(cache) = serde_json::from_str(&contents) {
                     debug!("Loaded desktop cache from disk");
-                    return Ok(cache);
+                    return cache;
                 }
             }
         }
 
         debug!("Building desktop file cache");
         let mut cache = HashMap::new();
-        
+
         // Get desktop directories, but handle gracefully if none exist
         let desktop_dirs = xdg::get_desktop_file_paths();
-        
+
         for dir in &desktop_dirs {
             // Skip directories that don't exist or can't be read
             if let Ok(entries) = fs::read_dir(dir) {
@@ -120,16 +121,15 @@ impl OpenWith {
         // Try to save cache, but don't fail if we can't
         if let Some(parent) = cache_path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
-                debug!("Failed to create cache directory: {}", e);
+                debug!("Failed to create cache directory: {e}");
             } else if let Ok(json) = serde_json::to_string(&cache) {
                 if let Err(e) = fs::write(&cache_path, json) {
-                    debug!("Failed to write cache file: {}", e);
+                    debug!("Failed to write cache file: {e}");
                 }
             }
         }
 
         // Always return Ok with whatever we found (even if empty)
-        Ok(cache)
     }
 
     fn get_applications_for_mime(&self, mime_type: &str) -> Vec<ApplicationEntry> {
@@ -522,7 +522,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
+
     use std::fs;
     use tempfile::TempDir;
 
@@ -653,14 +653,17 @@ Exec=test";
         // 2. No desktop directories exist
         // 3. Cache directory can't be created
         let result = OpenWith::new(args);
-        
+
         // If it fails, print the error for debugging
         if let Err(ref e) = result {
-            eprintln!("OpenWith::new failed with error: {}", e);
-            eprintln!("Error chain: {:?}", e);
+            eprintln!("OpenWith::new failed with error: {e}");
+            eprintln!("Error chain: {e:?}");
         }
-        
-        assert!(result.is_ok(), "OpenWith::new should handle missing cache and desktop files gracefully");
+
+        assert!(
+            result.is_ok(),
+            "OpenWith::new should handle missing cache and desktop files gracefully"
+        );
     }
 
     #[test]
