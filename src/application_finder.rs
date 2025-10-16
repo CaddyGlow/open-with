@@ -3,6 +3,7 @@ use crate::desktop_parser::DesktopFile;
 use crate::mime_associations::MimeAssociations;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,10 +151,19 @@ impl Default for ApplicationEntryBuilder {
     }
 }
 
-#[derive(Debug)]
 pub struct ApplicationFinder {
     desktop_cache: Box<dyn DesktopCache>,
     mime_associations: MimeAssociations,
+}
+
+impl fmt::Debug for ApplicationFinder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApplicationFinder")
+            // Desktop cache is a trait object; surface useful summary instead of Debug.
+            .field("desktop_cache_len", &self.desktop_cache.len())
+            .field("mime_associations", &self.mime_associations)
+            .finish()
+    }
 }
 
 impl ApplicationFinder {

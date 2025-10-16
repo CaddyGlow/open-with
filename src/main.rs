@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use log::{debug, info};
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -63,6 +64,10 @@ impl OpenWith {
     }
 
     fn cache_path() -> PathBuf {
+        if let Ok(override_path) = env::var("OPEN_WITH_CACHE_PATH") {
+            return PathBuf::from(override_path);
+        }
+
         dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("open-with")
@@ -271,6 +276,9 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::env;
+    use std::ffi::OsString;
     use std::fs;
     use std::process::{Command, Stdio};
     use tempfile::TempDir;
@@ -293,6 +301,29 @@ mod tests {
         let file_path = dir.join(name);
         fs::write(&file_path, content).unwrap();
         file_path
+    }
+
+    struct CacheEnvGuard {
+        original: Option<OsString>,
+    }
+
+    impl CacheEnvGuard {
+        const KEY: &'static str = "OPEN_WITH_CACHE_PATH";
+
+        fn set(path: &Path) -> Self {
+            let original = env::var_os(Self::KEY);
+            env::set_var(Self::KEY, path);
+            Self { original }
+        }
+    }
+
+    impl Drop for CacheEnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => env::set_var(Self::KEY, value),
+                None => env::remove_var(Self::KEY),
+            }
+        }
     }
 
     #[test]
@@ -377,7 +408,12 @@ Exec=test";
     }
 
     #[test]
+    #[serial]
     fn test_new_with_clear_cache() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_file = temp_dir.path().join("desktop_cache.json");
+        let _cache_env = CacheEnvGuard::set(&cache_file);
+
         // Test that OpenWith::new succeeds when clear_cache is true
         // This should work even in environments with no desktop files
         let args = Args {
@@ -425,6 +461,7 @@ Exec=test";
     }
 
     #[test]
+    #[serial]
     fn test_clear_cache() {
         use tempfile::TempDir;
 
@@ -435,17 +472,15 @@ Exec=test";
 
         // Create a mock cache file
         let cache_file = cache_dir.join("desktop_cache.json");
+        let _cache_env = CacheEnvGuard::set(&cache_file);
         fs::write(&cache_file, "test cache").unwrap();
 
         // Verify file exists
         assert!(cache_file.exists());
 
-        // Clear the specific cache file
-        if cache_file.exists() {
-            fs::remove_file(&cache_file).unwrap();
-        }
-
-        // Verify cache file is removed
+        // Clear the specific cache file via OpenWith helper
+        let result = OpenWith::clear_cache();
+        assert!(result.is_ok());
         assert!(!cache_file.exists());
     }
 
@@ -514,7 +549,12 @@ Exec=test";
     }
 
     #[test]
+    #[serial]
     fn test_run_clear_cache_only() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_file = temp_dir.path().join("desktop_cache.json");
+        let _cache_env = CacheEnvGuard::set(&cache_file);
+
         let args = Args {
             file: None,
             fuzzer: FuzzyFinder::Auto,
@@ -764,7 +804,12 @@ Exec=test";
     }
 
     #[test]
+    #[serial]
     fn test_clear_cache_with_permission_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_file = temp_dir.path().join("desktop_cache.json");
+        let _cache_env = CacheEnvGuard::set(&cache_file);
+
         // This test verifies error handling when cache file can't be removed
         // We can't easily simulate permission errors in tests, but we can test
         // the error path by mocking the scenario
@@ -777,7 +822,7 @@ Exec=test";
     #[test]
     fn test_run_fuzzy_finder_auto_detection() {
         // Test fuzzy finder auto-detection logic without actually running it
-        let args = Args {
+        let _args = Args {
             file: Some(PathBuf::from("test.txt")),
             fuzzer: FuzzyFinder::Auto,
             json: true, // Use JSON to avoid running fuzzy finder
@@ -789,7 +834,7 @@ Exec=test";
         };
 
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
-        let app = OpenWith::new(args).unwrap();
+        let _app = OpenWith::new(args).unwrap();
 
         // Test the fuzzy finder detection logic
         if which::which("fzf").is_ok() {

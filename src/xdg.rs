@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_get_desktop_file_paths_deduplication() {
-        let _paths = get_desktop_file_paths();
+        let paths = get_desktop_file_paths();
 
         // Check that there are no duplicate paths
         let mut seen = std::collections::HashSet::new();
@@ -311,9 +311,11 @@ mod tests {
 
         // XDG_DATA_DIRS should have default values
         assert!(!XDG_DATA_DIRS.is_empty());
-        assert!(XDG_DATA_DIRS
-            .iter()
-            .any(|p| p.to_str().unwrap().contains("/usr")));
+        assert!(
+            XDG_DATA_DIRS.iter().all(|p| p.is_absolute()),
+            "XDG_DATA_DIRS entries should be absolute paths: {:?}",
+            &*XDG_DATA_DIRS
+        );
 
         // XDG_CONFIG_DIRS should have default values
         assert!(!XDG_CONFIG_DIRS.is_empty());
@@ -323,7 +325,7 @@ mod tests {
     #[serial]
     fn test_get_desktop_file_paths_all_locations() {
         // This test ensures all paths in get_desktop_file_paths are checked
-        let paths = get_desktop_file_paths();
+        let _paths = get_desktop_file_paths();
 
         // The function should return paths even if they don't exist
         // This ensures we're testing all branches

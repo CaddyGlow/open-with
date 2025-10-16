@@ -60,13 +60,15 @@ impl CacheEntry {
     }
     
     fn is_expired(&self, file_path: &Path, max_age: Duration) -> bool {
-        // Check if file has been modified since caching
-        if let Ok(metadata) = fs::metadata(file_path) {
-            if let Ok(modified) = metadata.modified() {
-                if modified > self.last_modified {
-                    return true;
+        match fs::metadata(file_path) {
+            Ok(metadata) => {
+                if let Ok(modified) = metadata.modified() {
+                    if modified > self.last_modified {
+                        return true;
+                    }
                 }
             }
+            Err(_) => return true,
         }
         
         // Check if cache entry is too old
@@ -336,9 +338,9 @@ mod tests {
         let entries: Vec<_> = cache.iter().collect();
         assert_eq!(entries.len(), 2);
         
-        let paths: Vec<_> = entries.iter().map(|(path, _)| path).collect();
-        assert!(paths.contains(&&path1));
-        assert!(paths.contains(&&path2));
+        let paths: Vec<PathBuf> = entries.iter().map(|(path, _)| (*path).clone()).collect();
+        assert!(paths.contains(&path1));
+        assert!(paths.contains(&path2));
     }
     
     #[test]
@@ -393,7 +395,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache.json");
         let desktop_file = create_test_desktop_file();
-        let path = PathBuf::from("/test/app.desktop");
+        let path = temp_dir.path().join("app.desktop");
+        fs::write(&path, "[Desktop Entry]").unwrap();
         
         // Create cache and add entry
         {
@@ -476,9 +479,9 @@ mod tests {
         let entries: Vec<_> = cache.iter().collect();
         assert_eq!(entries.len(), 2);
         
-        let paths: Vec<_> = entries.iter().map(|(path, _)| path).collect();
-        assert!(paths.contains(&&path1));
-        assert!(paths.contains(&&path2));
+        let paths: Vec<PathBuf> = entries.iter().map(|(path, _)| (*path).clone()).collect();
+        assert!(paths.contains(&path1));
+        assert!(paths.contains(&path2));
     }
     
     #[test]
