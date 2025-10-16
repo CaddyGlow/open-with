@@ -361,4 +361,93 @@ Name=Broken Action";
         // Action without Exec should not be included
         assert!(!desktop_file.actions.contains_key("broken"));
     }
+
+    #[test]
+    fn test_parse_desktop_file_with_equals_in_value() {
+        let content = r"[Desktop Entry]
+Name=Test App
+Exec=test --option=value
+Comment=Test=Application
+Icon=test-icon";
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{content}").unwrap();
+
+        let desktop_file = DesktopFile::parse(temp_file.path()).unwrap();
+        let entry = desktop_file.main_entry.unwrap();
+
+        assert_eq!(entry.name, "Test App");
+        assert_eq!(entry.exec, "test --option=value");
+        assert_eq!(entry.comment, Some("Test=Application".to_string()));
+    }
+
+    #[test]
+    fn test_build_desktop_action_missing_name() {
+        let mut fields = HashMap::new();
+        fields.insert("Exec".to_string(), "test".to_string());
+
+        let result = DesktopFile::build_desktop_action(&fields);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing Name field"));
+    }
+
+    #[test]
+    fn test_parse_desktop_file_with_multiple_sections() {
+        let content = r"[Desktop Entry]
+Name=Multi Section App
+Exec=app
+
+[Desktop Action one]
+Name=Action One
+Exec=app --one
+
+[Some Other Section]
+Key=Value
+
+[Desktop Action two]
+Name=Action Two
+Exec=app --two";
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{content}").unwrap();
+
+        let desktop_file = DesktopFile::parse(temp_file.path()).unwrap();
+
+        // Should have main entry
+        assert!(desktop_file.main_entry.is_some());
+        assert_eq!(
+            desktop_file.main_entry.as_ref().unwrap().name,
+            "Multi Section App"
+        );
+
+        // Should have both actions
+        assert_eq!(desktop_file.actions.len(), 2);
+        assert!(desktop_file.actions.contains_key("one"));
+        assert!(desktop_file.actions.contains_key("two"));
+
+        // Other sections should be ignored
+    }
+
+    #[test]
+    fn test_parse_desktop_file_last_section_is_action() {
+        let content = r"[Desktop Entry]
+Name=App
+Exec=app
+
+[Desktop Action last]
+Name=Last Action
+Exec=app --last";
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{content}").unwrap();
+
+        let desktop_file = DesktopFile::parse(temp_file.path()).unwrap();
+
+        // Should handle last section being an action
+        assert_eq!(desktop_file.actions.len(), 1);
+        assert!(desktop_file.actions.contains_key("last"));
+    }
 }

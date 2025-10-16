@@ -28,3 +28,6 @@ devenv.local.nix
 .pre-commit-config.yaml
 .env
 .aider*
+tarpaulin-report.json
+cobertura.xml
+tarpaulin-report.html
