@@ -108,7 +108,7 @@ jobs:
 
       - name: Create security update issue
         if: env.SECURITY_UPDATES_NEEDED == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
