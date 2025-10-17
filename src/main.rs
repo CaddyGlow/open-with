@@ -37,7 +37,7 @@ use fuzzy_finder::FuzzyFinderRunner;
 use itertools::Itertools;
 use mime_associations::MimeAssociations;
 use mimeapps::MimeApps;
-use regex_handlers::RegexHandlerStore;
+use regex_handlers::{RegexHandler, RegexHandlerStore};
 use selector::SelectorRunner;
 use target::LaunchTarget;
 
@@ -248,6 +248,39 @@ impl OpenWith {
             .run(&self.config, applications, file_name, &fuzzer_name)
     }
 
+    fn execute_regex_handler(&self, handler: &RegexHandler, target: &LaunchTarget) -> Result<()> {
+        if handler.terminal {
+            info!(
+                "Regex handler requests terminal execution; launching command directly: {}",
+                handler.exec
+            );
+        }
+
+        let mut app = ApplicationEntry {
+            name: handler
+                .notes
+                .clone()
+                .unwrap_or_else(|| handler.exec.clone()),
+            exec: handler.exec.clone(),
+            desktop_file: PathBuf::from(format!("regex-handler-{}.desktop", handler.priority)),
+            comment: Some("Regex handler".to_string()),
+            icon: None,
+            is_xdg: false,
+            xdg_priority: handler.priority,
+            is_default: false,
+            action_id: None,
+        };
+
+        if let Some(comment) = &mut app.comment {
+            let patterns = handler.patterns().join(", ");
+            if !patterns.is_empty() {
+                comment.push_str(&format!(" ({patterns})"));
+            }
+        }
+
+        self.executor.execute(&app, target)
+    }
+
     fn execute_application(&self, app: &ApplicationEntry, target: &LaunchTarget) -> Result<()> {
         self.executor.execute(app, target)
     }
@@ -305,6 +338,16 @@ impl OpenWith {
 
         let mime_type = Self::mime_for_target(&target);
         info!("MIME type: {mime_type}");
+
+        let candidate = target.as_command_argument().into_owned();
+        if let Some(regex_handler) = self.regex_handlers.find_handler(&candidate) {
+            info!(
+                "Matched regex handler (priority {}): {}",
+                regex_handler.priority, regex_handler.exec
+            );
+            self.execute_regex_handler(regex_handler, &target)?;
+            return Ok(());
+        }
 
         let applications = self.get_applications_for_mime(&mime_type);
         debug!(
@@ -531,6 +574,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::{Command as ProcessCommand, Stdio};
+    use std::time::Duration;
     use tempfile::TempDir;
     use url::Url;
 
@@ -1481,6 +1525,66 @@ MimeType=text/plain;";
                 assert!(e.to_string().contains("No applications found"));
             }
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_regex_handler_executes_command() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().join("config");
+        fs::create_dir_all(config_dir.join("open-with")).unwrap();
+        let _guard = ConfigEnvGuard::set(&config_dir);
+
+        let marker_path = temp_dir.path().join("regex_touched");
+        let script_path = temp_dir.path().join("regex_script.sh");
+        fs::write(
+            &script_path,
+            format!("#!/bin/sh\ntouch {}\n", marker_path.display()),
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).unwrap();
+
+        let regex_path = config_dir.join("open-with").join("regex_handlers.toml");
+        fs::write(
+            &regex_path,
+            format!(
+                "[[handlers]]\nexec = \"sh {}\"\nregexes = [\".*\\\\.txt$\"]\npriority = 5\n",
+                script_path.display()
+            ),
+        )
+        .unwrap();
+
+        let target_path = temp_dir.path().join("match.txt");
+        fs::write(&target_path, "hello").unwrap();
+
+        let args = OpenArgs {
+            target: Some(target_path.to_string_lossy().to_string()),
+            fuzzer: FuzzyFinder::Auto,
+            json: false,
+            actions: false,
+            clear_cache: false,
+            verbose: false,
+            build_info: false,
+            generate_config: false,
+            config: None,
+            auto_open_single: false,
+            enable_selector: Some(false),
+            selector_command: None,
+            term_exec_args: None,
+        };
+
+        let app = OpenWith::new(args).unwrap();
+        app.run().unwrap();
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            marker_path.exists(),
+            "regex handler script should have touched marker file"
+        );
     }
 
     #[test]
