@@ -87,8 +87,8 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn load() -> Self {
-        let config_path = Self::config_path();
+    pub fn load(custom_path: Option<PathBuf>) -> Self {
+        let config_path = custom_path.unwrap_or_else(Self::config_path);
 
         if config_path.exists() {
             if let Ok(contents) = fs::read_to_string(&config_path) {

@@ -51,7 +51,7 @@ impl OpenWith {
 
         let desktop_cache = Self::load_desktop_cache();
         let mime_associations = MimeAssociations::load();
-        let config = config::Config::load();
+        let config = config::Config::load(args.config.clone());
 
         let application_finder = ApplicationFinder::new(desktop_cache, mime_associations);
         let fuzzy_finder_runner = FuzzyFinderRunner::new(config.clone());
@@ -284,9 +284,15 @@ impl OpenWith {
         if self.args.json {
             self.output_json(&applications, &target, &mime_type)?;
         } else if io::stdout().is_terminal() {
-            let display_name = target.display_name();
-            if let Some(index) = self.run_fuzzy_finder(&applications, display_name.as_ref())? {
-                self.execute_application(&applications[index], &target)?;
+            // If only one application and auto-open is enabled, open it directly
+            if applications.len() == 1 && self.args.auto_open_single {
+                info!("Auto-opening the only available application");
+                self.execute_application(&applications[0], &target)?;
+            } else {
+                let display_name = target.display_name();
+                if let Some(index) = self.run_fuzzy_finder(&applications, display_name.as_ref())? {
+                    self.execute_application(&applications[index], &target)?;
+                }
             }
         } else {
             self.output_json(&applications, &target, &mime_type)?;
@@ -306,11 +312,25 @@ fn main() -> Result<()> {
 
     if args.generate_config {
         let config = config::Config::default();
-        config.save()?;
-        println!(
-            "Generated default configuration at: {}",
-            config::Config::config_path().display()
-        );
+        if let Some(custom_path) = &args.config {
+            // Save to custom path
+            if let Some(parent) = custom_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let toml_string = toml::to_string_pretty(&config)?;
+            fs::write(custom_path, toml_string)?;
+            println!(
+                "Generated default configuration at: {}",
+                custom_path.display()
+            );
+        } else {
+            // Save to default path
+            config.save()?;
+            println!(
+                "Generated default configuration at: {}",
+                config::Config::config_path().display()
+            );
+        }
         return Ok(());
     }
 
@@ -349,6 +369,8 @@ mod tests {
             verbose: false,
             build_info: false,
             generate_config: false,
+            config: None,
+            auto_open_single: false,
         }
     }
 
@@ -480,6 +502,8 @@ Exec=test";
             verbose: false,
             build_info: false,
             generate_config: false,
+            config: None,
+            auto_open_single: false,
         };
 
         // Initialize env_logger for debugging if test fails
@@ -596,6 +620,8 @@ Exec=test";
             verbose: false,
             build_info: false,
             generate_config: false,
+            config: None,
+            auto_open_single: false,
         };
 
         let app = OpenWith::new(args).unwrap();
@@ -615,6 +641,8 @@ Exec=test";
             verbose: false,
             build_info: false,
             generate_config: false,
+            config: None,
+            auto_open_single: false,
         };
 
         let app = OpenWith::new(args).unwrap();
@@ -642,6 +670,8 @@ Exec=test";
             verbose: false,
             build_info: false,
             generate_config: false,
+            config: None,
+            auto_open_single: false,
         };
 
         // This should succeed even if no cache file exists
@@ -815,6 +845,8 @@ Exec=test";
             verbose: false,
             build_info: false,
             generate_config: false,
+            config: None,
+            auto_open_single: false,
         };
 
         let app = OpenWith::new(args).unwrap();
@@ -841,6 +873,8 @@ Exec=test";
             verbose: false,
             build_info: false,
             generate_config: false,
+            config: None,
+            auto_open_single: false,
         };
 
         let _app = OpenWith::new(args).unwrap();
@@ -909,6 +943,8 @@ Exec=test";
             verbose: false,
             build_info: false,
             generate_config: false,
+            config: None,
+            auto_open_single: false,
         };
 
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
@@ -1066,6 +1102,8 @@ MimeType=text/plain;";
             verbose: true, // Enable verbose
             build_info: false,
             generate_config: false,
+            config: None,
+            auto_open_single: false,
         };
 
         // Create an app - it will have empty cache for unknown mime types

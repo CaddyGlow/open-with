@@ -1,4 +1,5 @@
 use clap::{Parser, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, ValueEnum, PartialEq)]
 pub enum FuzzyFinder {
@@ -45,6 +46,14 @@ pub struct Args {
     /// Generate default configuration file
     #[arg(long)]
     pub generate_config: bool,
+
+    /// Path to configuration file
+    #[arg(short = 'c', long)]
+    pub config: Option<PathBuf>,
+
+    /// Automatically open if only one application is available (skip picker)
+    #[arg(long)]
+    pub auto_open_single: bool,
 }
 
 impl Args {
