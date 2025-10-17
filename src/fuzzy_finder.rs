@@ -5,23 +5,22 @@ use anyhow::{Context, Result};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-#[derive(Debug)]
-pub struct FuzzyFinderRunner {
-    config: Config,
-}
+#[derive(Debug, Default)]
+pub struct FuzzyFinderRunner;
 
 impl FuzzyFinderRunner {
-    pub fn new(config: Config) -> Self {
-        Self { config }
+    pub fn new() -> Self {
+        Self
     }
 
     pub fn run(
         &self,
+        config: &Config,
         applications: &[ApplicationEntry],
         file_name: &str,
         fuzzer_name: &str,
     ) -> Result<Option<usize>> {
-        let fuzzer_config = self.config.get_fuzzy_finder(fuzzer_name).ok_or_else(|| {
+        let fuzzer_config = config.get_fuzzy_finder(fuzzer_name).ok_or_else(|| {
             anyhow::anyhow!("No configuration found for fuzzy finder: {}", fuzzer_name)
         })?;
 
@@ -29,8 +28,8 @@ impl FuzzyFinderRunner {
         let mut template_engine = TemplateEngine::new();
         template_engine.set("file", file_name);
 
-        let prompt = template_engine.render(self.config.get_prompt_template(fuzzer_config));
-        let header = self.config.get_header_template(fuzzer_config);
+        let prompt = template_engine.render(config.get_prompt_template(fuzzer_config));
+        let header = config.get_header_template(fuzzer_config);
 
         template_engine.set("prompt", &prompt).set("header", header);
 
@@ -55,11 +54,11 @@ impl FuzzyFinderRunner {
         // Write entries using configurable templates
         for app in applications {
             let marker = if app.is_default {
-                self.config.get_marker(fuzzer_config, "default")
+                config.get_marker(fuzzer_config, "default")
             } else if app.is_xdg {
-                self.config.get_marker(fuzzer_config, "xdg")
+                config.get_marker(fuzzer_config, "xdg")
             } else {
-                self.config.get_marker(fuzzer_config, "available")
+                config.get_marker(fuzzer_config, "available")
             };
 
             let comment = app
@@ -95,11 +94,11 @@ impl FuzzyFinderRunner {
         // Generic matching for other fuzzy finders
         for (i, app) in applications.iter().enumerate() {
             let marker = if app.is_default {
-                self.config.get_marker(fuzzer_config, "default")
+                config.get_marker(fuzzer_config, "default")
             } else if app.is_xdg {
-                self.config.get_marker(fuzzer_config, "xdg")
+                config.get_marker(fuzzer_config, "xdg")
             } else {
-                self.config.get_marker(fuzzer_config, "available")
+                config.get_marker(fuzzer_config, "available")
             };
 
             let comment = app
@@ -124,11 +123,10 @@ impl FuzzyFinderRunner {
         Ok(None)
     }
 
-    pub fn detect_available(&self) -> Result<String> {
-        if which::which("fzf").is_ok() && self.config.get_fuzzy_finder("fzf").is_some() {
+    pub fn detect_available(&self, config: &Config) -> Result<String> {
+        if which::which("fzf").is_ok() && config.get_fuzzy_finder("fzf").is_some() {
             Ok("fzf".to_string())
-        } else if which::which("fuzzel").is_ok() && self.config.get_fuzzy_finder("fuzzel").is_some()
-        {
+        } else if which::which("fuzzel").is_ok() && config.get_fuzzy_finder("fuzzel").is_some() {
             Ok("fuzzel".to_string())
         } else {
             Err(anyhow::anyhow!(
@@ -141,37 +139,40 @@ impl FuzzyFinderRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application_finder::{ApplicationEntry, ApplicationEntryBuilder};
+    use crate::application_finder::ApplicationEntry;
+    use std::path::PathBuf;
 
     fn create_test_application() -> ApplicationEntry {
-        ApplicationEntryBuilder::new()
-            .name("Test App")
-            .exec("testapp %F")
-            .desktop_file("/usr/share/applications/testapp.desktop")
-            .comment("Test application")
-            .icon("testapp-icon")
-            .as_xdg_default()
-            .build()
-            .unwrap()
+        ApplicationEntry {
+            name: "Test App".to_string(),
+            exec: "testapp %F".to_string(),
+            desktop_file: PathBuf::from("/usr/share/applications/testapp.desktop"),
+            comment: Some("Test application".to_string()),
+            icon: Some("testapp-icon".to_string()),
+            is_xdg: true,
+            xdg_priority: 0,
+            is_default: true,
+            action_id: None,
+        }
     }
 
     #[test]
     fn test_new_fuzzy_finder_runner() {
         let config = Config::default();
-        let runner = FuzzyFinderRunner::new(config);
+        let _runner = FuzzyFinderRunner::new();
 
         // Should have default fuzzy finder configs
-        assert!(runner.config.get_fuzzy_finder("fzf").is_some());
-        assert!(runner.config.get_fuzzy_finder("fuzzel").is_some());
+        assert!(config.get_fuzzy_finder("fzf").is_some());
+        assert!(config.get_fuzzy_finder("fuzzel").is_some());
     }
 
     #[test]
     fn test_detect_available_with_fzf() {
         let config = Config::default();
-        let runner = FuzzyFinderRunner::new(config);
+        let runner = FuzzyFinderRunner::new();
 
         // This test depends on system state, so we'll test the logic
-        let result = runner.detect_available();
+        let result = runner.detect_available(&config);
 
         // Should either succeed with a fuzzy finder name or fail with appropriate error
         match result {
@@ -187,10 +188,10 @@ mod tests {
     #[test]
     fn test_run_with_invalid_fuzzer() {
         let config = Config::default();
-        let runner = FuzzyFinderRunner::new(config);
+        let runner = FuzzyFinderRunner::new();
         let _applications = vec![create_test_application()];
 
-        let result = runner.run(&_applications, "test.txt", "nonexistent");
+        let result = runner.run(&config, &_applications, "test.txt", "nonexistent");
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -202,21 +203,21 @@ mod tests {
     fn test_run_command_construction() {
         // Test that we can construct the command without actually running it
         let config = Config::default();
-        let runner = FuzzyFinderRunner::new(config);
+        let runner = FuzzyFinderRunner::new();
         let _applications = vec![create_test_application()];
 
         // We can't easily test the actual execution without mocking,
         // but we can test that the function handles the setup correctly
-        let fuzzer_config = runner.config.get_fuzzy_finder("fzf").unwrap();
+        let fuzzer_config = config.get_fuzzy_finder("fzf").unwrap();
 
         // Test template engine setup
         let mut template_engine = TemplateEngine::new();
         template_engine.set("file", "test.txt");
 
-        let prompt = template_engine.render(runner.config.get_prompt_template(fuzzer_config));
+        let prompt = template_engine.render(config.get_prompt_template(fuzzer_config));
         assert!(prompt.contains("test.txt"));
 
-        let header = runner.config.get_header_template(fuzzer_config);
+        let header = config.get_header_template(fuzzer_config);
         assert!(!header.is_empty());
 
         template_engine.set("prompt", &prompt).set("header", header);
@@ -232,16 +233,16 @@ mod tests {
     #[test]
     fn test_entry_display_generation() {
         let config = Config::default();
-        let runner = FuzzyFinderRunner::new(config);
+        let _runner = FuzzyFinderRunner::new();
         let app = create_test_application();
-        let fuzzer_config = runner.config.get_fuzzy_finder("fzf").unwrap();
+        let fuzzer_config = config.get_fuzzy_finder("fzf").unwrap();
 
         let marker = if app.is_default {
-            runner.config.get_marker(fuzzer_config, "default")
+            config.get_marker(fuzzer_config, "default")
         } else if app.is_xdg {
-            runner.config.get_marker(fuzzer_config, "xdg")
+            config.get_marker(fuzzer_config, "xdg")
         } else {
-            runner.config.get_marker(fuzzer_config, "available")
+            config.get_marker(fuzzer_config, "available")
         };
 
         let comment = app
@@ -277,30 +278,33 @@ mod tests {
     #[test]
     fn test_entry_matching_logic() {
         let config = Config::default();
-        let runner = FuzzyFinderRunner::new(config);
+        let _runner = FuzzyFinderRunner::new();
         let applications = vec![
             create_test_application(),
-            ApplicationEntryBuilder::new()
-                .name("Second App")
-                .exec("secondapp %F")
-                .desktop_file("/usr/share/applications/secondapp.desktop")
-                .comment("Second test application")
-                .as_available()
-                .build()
-                .unwrap(),
+            ApplicationEntry {
+                name: "Second App".to_string(),
+                exec: "secondapp %F".to_string(),
+                desktop_file: PathBuf::from("/usr/share/applications/secondapp.desktop"),
+                comment: Some("Second test application".to_string()),
+                icon: None,
+                is_xdg: false,
+                xdg_priority: -1,
+                is_default: false,
+                action_id: None,
+            },
         ];
 
-        let fuzzer_config = runner.config.get_fuzzy_finder("fzf").unwrap();
+        let fuzzer_config = config.get_fuzzy_finder("fzf").unwrap();
 
         // Generate display strings for both apps
         let mut displays = Vec::new();
         for app in &applications {
             let marker = if app.is_default {
-                runner.config.get_marker(fuzzer_config, "default")
+                config.get_marker(fuzzer_config, "default")
             } else if app.is_xdg {
-                runner.config.get_marker(fuzzer_config, "xdg")
+                config.get_marker(fuzzer_config, "xdg")
             } else {
-                runner.config.get_marker(fuzzer_config, "available")
+                config.get_marker(fuzzer_config, "available")
             };
 
             let comment = app
@@ -323,11 +327,11 @@ mod tests {
         let mut found_index = None;
         for (i, app) in applications.iter().enumerate() {
             let marker = if app.is_default {
-                runner.config.get_marker(fuzzer_config, "default")
+                config.get_marker(fuzzer_config, "default")
             } else if app.is_xdg {
-                runner.config.get_marker(fuzzer_config, "xdg")
+                config.get_marker(fuzzer_config, "xdg")
             } else {
-                runner.config.get_marker(fuzzer_config, "available")
+                config.get_marker(fuzzer_config, "available")
             };
 
             let comment = app
@@ -355,12 +359,12 @@ mod tests {
     #[test]
     fn test_different_marker_types() {
         let config = Config::default();
-        let runner = FuzzyFinderRunner::new(config);
-        let fuzzer_config = runner.config.get_fuzzy_finder("fzf").unwrap();
+        let _runner = FuzzyFinderRunner::new();
+        let fuzzer_config = config.get_fuzzy_finder("fzf").unwrap();
 
-        let default_marker = runner.config.get_marker(fuzzer_config, "default");
-        let xdg_marker = runner.config.get_marker(fuzzer_config, "xdg");
-        let available_marker = runner.config.get_marker(fuzzer_config, "available");
+        let default_marker = config.get_marker(fuzzer_config, "default");
+        let xdg_marker = config.get_marker(fuzzer_config, "xdg");
+        let available_marker = config.get_marker(fuzzer_config, "available");
 
         // All markers should be different
         assert_ne!(default_marker, xdg_marker);
@@ -376,8 +380,8 @@ mod tests {
     #[test]
     fn test_template_substitution_in_args() {
         let config = Config::default();
-        let runner = FuzzyFinderRunner::new(config);
-        let fuzzer_config = runner.config.get_fuzzy_finder("fzf").unwrap();
+        let _runner = FuzzyFinderRunner::new();
+        let fuzzer_config = config.get_fuzzy_finder("fzf").unwrap();
 
         let mut template_engine = TemplateEngine::new();
         template_engine

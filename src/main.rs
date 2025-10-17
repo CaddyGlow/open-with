@@ -38,8 +38,8 @@ use target::LaunchTarget;
 struct OpenWith {
     application_finder: ApplicationFinder,
     fuzzy_finder_runner: FuzzyFinderRunner,
-    _executor: ApplicationExecutor,
-    _config: config::Config,
+    executor: ApplicationExecutor,
+    config: config::Config,
     args: Args,
 }
 
@@ -51,17 +51,22 @@ impl OpenWith {
 
         let desktop_cache = Self::load_desktop_cache();
         let mime_associations = MimeAssociations::load();
-        let config = config::Config::load(args.config.clone());
+        let config = config::Config::load(args.config.clone()).with_context(|| {
+            args.config
+                .as_ref()
+                .map(|path| format!("Failed to load configuration from {}", path.display()))
+                .unwrap_or_else(|| "Failed to load configuration".to_string())
+        })?;
 
         let application_finder = ApplicationFinder::new(desktop_cache, mime_associations);
-        let fuzzy_finder_runner = FuzzyFinderRunner::new(config.clone());
+        let fuzzy_finder_runner = FuzzyFinderRunner::new();
         let executor = ApplicationExecutor::new();
 
         Ok(Self {
             application_finder,
             fuzzy_finder_runner,
-            _executor: executor,
-            _config: config,
+            executor,
+            config,
             args,
         })
     }
@@ -205,17 +210,17 @@ impl OpenWith {
         file_name: &str,
     ) -> Result<Option<usize>> {
         let fuzzer_name = match &self.args.fuzzer {
-            FuzzyFinder::Auto => self.fuzzy_finder_runner.detect_available()?,
+            FuzzyFinder::Auto => self.fuzzy_finder_runner.detect_available(&self.config)?,
             FuzzyFinder::Fzf => "fzf".to_string(),
             FuzzyFinder::Fuzzel => "fuzzel".to_string(),
         };
 
         self.fuzzy_finder_runner
-            .run(applications, file_name, &fuzzer_name)
+            .run(&self.config, applications, file_name, &fuzzer_name)
     }
 
     fn execute_application(&self, app: &ApplicationEntry, target: &LaunchTarget) -> Result<()> {
-        ApplicationExecutor::execute(app, target)
+        self.executor.execute(app, target)
     }
 
     fn output_json(
@@ -347,7 +352,6 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application_finder::ApplicationEntryBuilder;
     use serial_test::serial;
     use std::collections::HashMap;
     use std::env;
@@ -405,15 +409,17 @@ mod tests {
 
     #[test]
     fn test_application_entry_serialization() {
-        let app = application_finder::ApplicationEntryBuilder::new()
-            .name("Test App")
-            .exec("test-app %F")
-            .desktop_file("/usr/share/applications/test.desktop")
-            .comment("Test application")
-            .icon("test-icon")
-            .as_xdg_default()
-            .build()
-            .unwrap();
+        let app = ApplicationEntry {
+            name: "Test App".to_string(),
+            exec: "test-app %F".to_string(),
+            desktop_file: PathBuf::from("/usr/share/applications/test.desktop"),
+            comment: Some("Test application".to_string()),
+            icon: Some("test-icon".to_string()),
+            is_xdg: true,
+            xdg_priority: 0,
+            is_default: true,
+            action_id: None,
+        };
 
         let json = serde_json::to_string(&app).unwrap();
         let deserialized: ApplicationEntry = serde_json::from_str(&json).unwrap();
@@ -425,27 +431,30 @@ mod tests {
 
     #[test]
     fn test_clean_exec_command() {
+        let target = LaunchTarget::File(PathBuf::from("/tmp/test.txt"));
         let test_cases = vec![
             ("app %f", "app"),
             ("app %F %u", "app"),
-            ("app %%", "app %"),
+            ("app %%", "app"),
             ("app %i %c %k", "app"),
             ("  app %f  ", "app"),
         ];
 
-        for (input, expected) in test_cases {
-            let clean = input
-                .replace("%u", "")
-                .replace("%U", "")
-                .replace("%f", "")
-                .replace("%F", "")
-                .replace("%i", "")
-                .replace("%c", "")
-                .replace("%k", "")
-                .replace("%%", "%");
-            let clean = clean.trim();
+        for (input, expected_command) in test_cases {
+            let command = ApplicationExecutor::prepare_command(input, &target)
+                .unwrap_or_else(|e| panic!("Command preparation failed for {input}: {e}"));
+            assert_eq!(
+                command.first().unwrap(),
+                expected_command,
+                "Failed for input: {input}"
+            );
 
-            assert_eq!(clean, expected, "Failed for input: {input}");
+            if input.contains("%%") {
+                assert!(
+                    command.iter().any(|arg| arg == "%"),
+                    "Expected literal % in args for input: {input}"
+                );
+            }
         }
     }
 
@@ -568,15 +577,17 @@ Exec=test";
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
         let app = OpenWith::new(args).unwrap();
 
-        let applications = vec![application_finder::ApplicationEntryBuilder::new()
-            .name("Test App")
-            .exec("test-app %F")
-            .desktop_file("/usr/share/applications/test.desktop")
-            .comment("Test application")
-            .icon("test-icon")
-            .as_xdg_default()
-            .build()
-            .unwrap()];
+        let applications = vec![ApplicationEntry {
+            name: "Test App".to_string(),
+            exec: "test-app %F".to_string(),
+            desktop_file: PathBuf::from("/usr/share/applications/test.desktop"),
+            comment: Some("Test application".to_string()),
+            icon: Some("test-icon".to_string()),
+            is_xdg: true,
+            xdg_priority: 0,
+            is_default: true,
+            action_id: None,
+        }];
 
         let mime_type = "text/plain";
         let target = LaunchTarget::File(PathBuf::from("test.txt"));
@@ -970,15 +981,17 @@ Exec=test";
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
         let app = OpenWith::new(args).unwrap();
 
-        let applications = vec![ApplicationEntryBuilder::new()
-            .name("Test App")
-            .exec("test-app %F")
-            .desktop_file("/usr/share/applications/test.desktop")
-            .comment("Test application")
-            .icon("test-icon")
-            .as_available()
-            .build()
-            .unwrap()];
+        let applications = vec![ApplicationEntry {
+            name: "Test App".to_string(),
+            exec: "test-app %F".to_string(),
+            desktop_file: PathBuf::from("/usr/share/applications/test.desktop"),
+            comment: Some("Test application".to_string()),
+            icon: Some("test-icon".to_string()),
+            is_xdg: false,
+            xdg_priority: -1,
+            is_default: false,
+            action_id: None,
+        }];
 
         let mime_type = "text/plain";
         let target = LaunchTarget::File(PathBuf::from("test.txt"));
@@ -990,20 +1003,25 @@ Exec=test";
 
     #[test]
     fn test_execute_application_empty_exec() {
-        let app = ApplicationEntryBuilder::new()
-            .name("Empty Exec")
-            .exec("   %f %F   ") // Will become empty after cleaning
-            .desktop_file("test.desktop")
-            .as_available()
-            .build()
-            .unwrap();
+        let app = ApplicationEntry {
+            name: "Empty Exec".to_string(),
+            exec: "   %f %F   ".to_string(), // Will become empty after cleaning
+            desktop_file: PathBuf::from("test.desktop"),
+            comment: None,
+            icon: None,
+            is_xdg: false,
+            xdg_priority: -1,
+            is_default: false,
+            action_id: None,
+        };
 
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("test.txt");
         fs::write(&test_file, "test content").unwrap();
         let target = LaunchTarget::File(test_file);
 
-        let result = ApplicationExecutor::execute(&app, &target);
+        let executor = ApplicationExecutor::new();
+        let result = executor.execute(&app, &target);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Empty exec command");
     }
@@ -1130,15 +1148,17 @@ MimeType=text/plain;";
         // Test that fuzzy finder commands are constructed correctly
         // without actually running them
 
-        let _applications = [application_finder::ApplicationEntryBuilder::new()
-            .name("Test App")
-            .exec("test-app %F")
-            .desktop_file("/usr/share/applications/test.desktop")
-            .comment("Test application")
-            .icon("test-icon")
-            .as_xdg_default()
-            .build()
-            .unwrap()];
+        let _applications = [ApplicationEntry {
+            name: "Test App".to_string(),
+            exec: "test-app %F".to_string(),
+            desktop_file: PathBuf::from("/usr/share/applications/test.desktop"),
+            comment: Some("Test application".to_string()),
+            icon: Some("test-icon".to_string()),
+            is_xdg: true,
+            xdg_priority: 0,
+            is_default: true,
+            action_id: None,
+        }];
 
         // Test fzf command construction - just build the command, don't run it
         let mut fzf_cmd = Command::new("fzf");

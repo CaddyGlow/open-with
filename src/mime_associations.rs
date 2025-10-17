@@ -1,17 +1,14 @@
 use std::collections::HashMap;
 use std::fs;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MimeAssociations {
     associations: HashMap<String, Vec<String>>,
 }
 
 impl MimeAssociations {
-    #![allow(dead_code)]
     pub fn new() -> Self {
-        Self {
-            associations: HashMap::new(),
-        }
+        Self::default()
     }
 
     // Also add this for testing

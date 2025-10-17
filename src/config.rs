@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -87,19 +88,29 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn load(custom_path: Option<PathBuf>) -> Self {
-        let config_path = custom_path.unwrap_or_else(Self::config_path);
+    pub fn load(custom_path: Option<PathBuf>) -> Result<Self> {
+        if let Some(path) = custom_path {
+            let contents = fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read config file at {}", path.display()))?;
+
+            let config = toml::from_str::<Config>(&contents)
+                .with_context(|| format!("Failed to parse config file at {}", path.display()))?;
+
+            return Ok(config);
+        }
+
+        let config_path = Self::config_path();
 
         if config_path.exists() {
             if let Ok(contents) = fs::read_to_string(&config_path) {
                 if let Ok(config) = toml::from_str::<Config>(&contents) {
-                    return config;
+                    return Ok(config);
                 }
             }
         }
 
         // Return default config if file doesn't exist or can't be parsed
-        Self::default()
+        Ok(Self::default())
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
@@ -166,6 +177,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_default_config() {
@@ -222,5 +234,45 @@ mod tests {
     fn test_config_path() {
         let path = Config::config_path();
         assert!(path.ends_with("open-with/config.toml"));
+    }
+
+    #[test]
+    fn test_load_custom_config_success() {
+        let temp_dir = TempDir::new().unwrap();
+        let custom_path = temp_dir.path().join("config.toml");
+
+        let original = Config::default();
+        let contents = toml::to_string_pretty(&original).unwrap();
+        fs::write(&custom_path, contents).unwrap();
+
+        let loaded = Config::load(Some(custom_path)).unwrap();
+        assert_eq!(loaded.fuzzy_finders.len(), original.fuzzy_finders.len());
+    }
+
+    #[test]
+    fn test_load_custom_config_missing_file_errors() {
+        let temp_dir = TempDir::new().unwrap();
+        let custom_path = temp_dir.path().join("missing_config.toml");
+
+        let err = Config::load(Some(custom_path.clone())).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("Failed to read config file"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn test_load_custom_config_invalid_file_errors() {
+        let temp_dir = TempDir::new().unwrap();
+        let custom_path = temp_dir.path().join("invalid.toml");
+        fs::write(&custom_path, "not = [valid").unwrap();
+
+        let err = Config::load(Some(custom_path.clone())).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("Failed to parse config file"),
+            "unexpected error message: {message}"
+        );
     }
 }

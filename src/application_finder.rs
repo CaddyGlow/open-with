@@ -19,27 +19,17 @@ pub struct ApplicationEntry {
     pub action_id: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ApplicationEntryBuilder {
-    name: Option<String>,
-    exec: Option<String>,
-    desktop_file: Option<PathBuf>,
-    comment: Option<String>,
-    icon: Option<String>,
-    is_xdg: bool,
-    xdg_priority: i32,
-    is_default: bool,
-    action_id: Option<String>,
-}
-
-impl ApplicationEntryBuilder {
-    pub fn new() -> Self {
+impl ApplicationEntry {
+    pub fn from_desktop_entry(
+        entry: &crate::desktop_parser::DesktopEntry,
+        desktop_file: PathBuf,
+    ) -> Self {
         Self {
-            name: None,
-            exec: None,
-            desktop_file: None,
-            comment: None,
-            icon: None,
+            name: entry.name.clone(),
+            exec: entry.exec.clone(),
+            desktop_file,
+            comment: entry.comment.clone(),
+            icon: entry.icon.clone(),
             is_xdg: false,
             xdg_priority: -1,
             is_default: false,
@@ -47,118 +37,37 @@ impl ApplicationEntryBuilder {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn name<S: Into<String>>(mut self, name: S) -> Self {
-        self.name = Some(name.into());
-        self
+    pub fn from_desktop_action(
+        main_entry: &crate::desktop_parser::DesktopEntry,
+        action_id: &str,
+        action: &crate::desktop_parser::DesktopAction,
+        desktop_file: PathBuf,
+    ) -> Self {
+        Self {
+            name: format!("{} - {}", main_entry.name, action.name),
+            exec: action.exec.clone(),
+            desktop_file,
+            comment: Some(format!("Action: {}", action.name)),
+            icon: action.icon.clone().or_else(|| main_entry.icon.clone()),
+            is_xdg: false,
+            xdg_priority: -1,
+            is_default: false,
+            action_id: Some(action_id.to_string()),
+        }
     }
 
-    #[allow(dead_code)]
-    pub fn exec<S: Into<String>>(mut self, exec: S) -> Self {
-        self.exec = Some(exec.into());
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn desktop_file<P: Into<PathBuf>>(mut self, path: P) -> Self {
-        self.desktop_file = Some(path.into());
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn comment<S: Into<String>>(mut self, comment: S) -> Self {
-        self.comment = Some(comment.into());
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn icon<S: Into<String>>(mut self, icon: S) -> Self {
-        self.icon = Some(icon.into());
-        self
-    }
-
-    #[allow(clippy::wrong_self_convention)]
-    pub fn as_xdg(mut self, priority: i32) -> Self {
+    pub fn with_xdg(mut self, priority: i32, is_default: bool) -> Self {
         self.is_xdg = true;
         self.xdg_priority = priority;
+        self.is_default = is_default;
         self
     }
 
-    #[allow(clippy::wrong_self_convention)]
-    pub fn as_xdg_default(mut self) -> Self {
-        self.is_xdg = true;
-        self.xdg_priority = 0;
-        self.is_default = true;
-        self
-    }
-
-    #[allow(clippy::wrong_self_convention)]
     pub fn as_available(mut self) -> Self {
         self.is_xdg = false;
         self.xdg_priority = -1;
         self.is_default = false;
         self
-    }
-
-    #[allow(dead_code)]
-    pub fn with_action<S: Into<String>>(mut self, action_id: S) -> Self {
-        self.action_id = Some(action_id.into());
-        self
-    }
-
-    #[allow(clippy::wrong_self_convention)]
-    pub fn from_desktop_entry(
-        mut self,
-        entry: &crate::desktop_parser::DesktopEntry,
-        desktop_file: PathBuf,
-    ) -> Self {
-        self.name = Some(entry.name.clone());
-        self.exec = Some(entry.exec.clone());
-        self.desktop_file = Some(desktop_file);
-        self.comment = entry.comment.clone();
-        self.icon = entry.icon.clone();
-        self
-    }
-
-    #[allow(clippy::wrong_self_convention)]
-    pub fn from_desktop_action(
-        mut self,
-        main_entry: &crate::desktop_parser::DesktopEntry,
-        action: &crate::desktop_parser::DesktopAction,
-        action_id: String,
-        desktop_file: PathBuf,
-    ) -> Self {
-        self.name = Some(format!("{} - {}", main_entry.name, action.name));
-        self.exec = Some(action.exec.clone());
-        self.desktop_file = Some(desktop_file);
-        self.comment = Some(format!("Action: {}", action.name));
-        self.icon = action.icon.clone().or_else(|| main_entry.icon.clone());
-        self.action_id = Some(action_id);
-        self
-    }
-
-    pub fn build(self) -> Result<ApplicationEntry, String> {
-        let name = self.name.ok_or("Name is required")?;
-        let exec = self.exec.ok_or("Exec is required")?;
-        let desktop_file = self.desktop_file.ok_or("Desktop file path is required")?;
-
-        Ok(ApplicationEntry {
-            name,
-            exec,
-            desktop_file,
-            comment: self.comment,
-            icon: self.icon,
-            is_xdg: self.is_xdg,
-            xdg_priority: self.xdg_priority,
-            is_default: self.is_default,
-            action_id: self.action_id,
-        })
-    }
-}
-
-impl Default for ApplicationEntryBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -199,34 +108,20 @@ impl ApplicationFinder {
                         let priority_i32 = i32::try_from(priority).unwrap_or(i32::MAX);
                         let is_default = priority == 0;
 
-                        let app_entry = ApplicationEntryBuilder::new()
-                            .from_desktop_entry(entry, path.clone())
-                            .as_xdg(priority_i32);
-
-                        let app_entry = if is_default {
-                            app_entry.as_xdg_default()
-                        } else {
-                            app_entry
-                        };
-
-                        if let Ok(app) = app_entry.build() {
-                            applications.push(app);
-                        }
+                        let app_entry = ApplicationEntry::from_desktop_entry(entry, path.clone())
+                            .with_xdg(priority_i32, is_default);
+                        applications.push(app_entry);
 
                         if include_actions {
                             for (action_id, action) in &desktop_file.actions {
-                                if let Ok(action_app) = ApplicationEntryBuilder::new()
-                                    .from_desktop_action(
-                                        entry,
-                                        action,
-                                        action_id.clone(),
-                                        path.clone(),
-                                    )
-                                    .as_xdg(priority_i32)
-                                    .build()
-                                {
-                                    applications.push(action_app);
-                                }
+                                let action_app = ApplicationEntry::from_desktop_action(
+                                    entry,
+                                    action_id,
+                                    action,
+                                    path.clone(),
+                                )
+                                .with_xdg(priority_i32, false);
+                                applications.push(action_app);
                             }
                         }
                     }
@@ -245,28 +140,20 @@ impl ApplicationFinder {
                         .to_string();
 
                     if seen.insert(desktop_id) {
-                        if let Ok(app) = ApplicationEntryBuilder::new()
-                            .from_desktop_entry(entry, path.clone())
-                            .as_available()
-                            .build()
-                        {
-                            applications.push(app);
-                        }
+                        let app = ApplicationEntry::from_desktop_entry(entry, path.clone())
+                            .as_available();
+                        applications.push(app);
 
                         if include_actions {
                             for (action_id, action) in &desktop_file.actions {
-                                if let Ok(action_app) = ApplicationEntryBuilder::new()
-                                    .from_desktop_action(
-                                        entry,
-                                        action,
-                                        action_id.clone(),
-                                        path.clone(),
-                                    )
-                                    .as_available()
-                                    .build()
-                                {
-                                    applications.push(action_app);
-                                }
+                                let action_app = ApplicationEntry::from_desktop_action(
+                                    entry,
+                                    action_id,
+                                    action,
+                                    path.clone(),
+                                )
+                                .as_available();
+                                applications.push(action_app);
                             }
                         }
                     }
@@ -323,18 +210,20 @@ mod tests {
     }
 
     fn create_test_application_entry(name: &str) -> ApplicationEntry {
-        ApplicationEntryBuilder::new()
-            .name(name)
-            .exec(format!("{} %F", name.to_lowercase()))
-            .desktop_file(PathBuf::from(format!(
+        ApplicationEntry {
+            name: name.to_string(),
+            exec: format!("{} %F", name.to_lowercase()),
+            desktop_file: PathBuf::from(format!(
                 "/usr/share/applications/{}.desktop",
                 name.to_lowercase()
-            )))
-            .comment(format!("Test application {}", name))
-            .icon(format!("{}-icon", name.to_lowercase()))
-            .as_available()
-            .build()
-            .unwrap()
+            )),
+            comment: Some(format!("Test application {}", name)),
+            icon: Some(format!("{}-icon", name.to_lowercase())),
+            is_xdg: false,
+            xdg_priority: -1,
+            is_default: false,
+            action_id: None,
+        }
     }
 
     #[test]
@@ -603,117 +492,23 @@ mod tests {
     }
 
     #[test]
-    fn test_application_entry_builder_basic() {
-        let app = ApplicationEntryBuilder::new()
-            .name("Test App")
-            .exec("testapp %F")
-            .desktop_file("/usr/share/applications/test.desktop")
-            .build()
-            .unwrap();
-
-        assert_eq!(app.name, "Test App");
-        assert_eq!(app.exec, "testapp %F");
-        assert_eq!(
-            app.desktop_file,
-            PathBuf::from("/usr/share/applications/test.desktop")
-        );
-        assert!(!app.is_xdg);
-        assert!(!app.is_default);
-        assert_eq!(app.xdg_priority, -1);
-    }
-
-    #[test]
-    fn test_application_entry_builder_with_optional_fields() {
-        let app = ApplicationEntryBuilder::new()
-            .name("Test App")
-            .exec("testapp %F")
-            .desktop_file("/usr/share/applications/test.desktop")
-            .comment("A test application")
-            .icon("test-icon")
-            .build()
-            .unwrap();
-
-        assert_eq!(app.comment, Some("A test application".to_string()));
-        assert_eq!(app.icon, Some("test-icon".to_string()));
-    }
-
-    #[test]
-    fn test_application_entry_builder_as_xdg() {
-        let app = ApplicationEntryBuilder::new()
-            .name("XDG App")
-            .exec("xdgapp %F")
-            .desktop_file("/usr/share/applications/xdg.desktop")
-            .as_xdg(1)
-            .build()
-            .unwrap();
-
-        assert!(app.is_xdg);
-        assert!(!app.is_default);
-        assert_eq!(app.xdg_priority, 1);
-    }
-
-    #[test]
-    fn test_application_entry_builder_as_xdg_default() {
-        let app = ApplicationEntryBuilder::new()
-            .name("Default App")
-            .exec("defaultapp %F")
-            .desktop_file("/usr/share/applications/default.desktop")
-            .as_xdg_default()
-            .build()
-            .unwrap();
-
-        assert!(app.is_xdg);
-        assert!(app.is_default);
-        assert_eq!(app.xdg_priority, 0);
-    }
-
-    #[test]
-    fn test_application_entry_builder_as_available() {
-        let app = ApplicationEntryBuilder::new()
-            .name("Available App")
-            .exec("availableapp %F")
-            .desktop_file("/usr/share/applications/available.desktop")
-            .as_available()
-            .build()
-            .unwrap();
-
-        assert!(!app.is_xdg);
-        assert!(!app.is_default);
-        assert_eq!(app.xdg_priority, -1);
-    }
-
-    #[test]
-    fn test_application_entry_builder_with_action() {
-        let app = ApplicationEntryBuilder::new()
-            .name("Action App")
-            .exec("actionapp --edit %F")
-            .desktop_file("/usr/share/applications/action.desktop")
-            .with_action("edit")
-            .build()
-            .unwrap();
-
-        assert_eq!(app.action_id, Some("edit".to_string()));
-    }
-
-    #[test]
-    fn test_application_entry_builder_from_desktop_entry() {
+    fn test_application_entry_from_desktop_entry() {
         let entry = create_test_desktop_entry("FromEntry", vec!["text/plain"]);
         let path = PathBuf::from("/usr/share/applications/fromentry.desktop");
 
-        let app = ApplicationEntryBuilder::new()
-            .from_desktop_entry(&entry, path.clone())
-            .build()
-            .unwrap();
+        let app = ApplicationEntry::from_desktop_entry(&entry, path.clone());
 
         assert_eq!(app.name, "FromEntry");
         assert_eq!(app.exec, "fromentry %F");
         assert_eq!(app.desktop_file, path);
         assert_eq!(app.comment, Some("Test application FromEntry".to_string()));
         assert_eq!(app.icon, Some("fromentry-icon".to_string()));
+        assert!(!app.is_xdg);
+        assert_eq!(app.xdg_priority, -1);
     }
 
     #[test]
-    fn test_application_entry_builder_from_desktop_action() {
+    fn test_application_entry_from_desktop_action() {
         let entry = create_test_desktop_entry("ActionApp", vec!["image/png"]);
         let action = crate::desktop_parser::DesktopAction {
             name: "Edit Image".to_string(),
@@ -722,10 +517,7 @@ mod tests {
         };
         let path = PathBuf::from("/usr/share/applications/actionapp.desktop");
 
-        let app = ApplicationEntryBuilder::new()
-            .from_desktop_action(&entry, &action, "edit".to_string(), path.clone())
-            .build()
-            .unwrap();
+        let app = ApplicationEntry::from_desktop_action(&entry, "edit", &action, path.clone());
 
         assert_eq!(app.name, "ActionApp - Edit Image");
         assert_eq!(app.exec, "actionapp --edit %F");
@@ -733,98 +525,44 @@ mod tests {
         assert_eq!(app.comment, Some("Action: Edit Image".to_string()));
         assert_eq!(app.icon, Some("edit-icon".to_string()));
         assert_eq!(app.action_id, Some("edit".to_string()));
+        assert!(!app.is_xdg);
     }
 
     #[test]
-    fn test_application_entry_builder_missing_required_fields() {
-        // Missing name
-        let result = ApplicationEntryBuilder::new()
-            .exec("test %F")
-            .desktop_file("/test.desktop")
-            .build();
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Name is required");
+    fn test_application_entry_with_xdg() {
+        let entry = create_test_desktop_entry("XDGApp", vec!["text/plain"]);
+        let path = PathBuf::from("/usr/share/applications/xdgapp.desktop");
 
-        // Missing exec
-        let result = ApplicationEntryBuilder::new()
-            .name("Test")
-            .desktop_file("/test.desktop")
-            .build();
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Exec is required");
+        let app = ApplicationEntry::from_desktop_entry(&entry, path).with_xdg(2, false);
 
-        // Missing desktop_file
-        let result = ApplicationEntryBuilder::new()
-            .name("Test")
-            .exec("test %F")
-            .build();
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Desktop file path is required");
-    }
-
-    #[test]
-    fn test_application_entry_builder_fluent_chaining() {
-        let app = ApplicationEntryBuilder::new()
-            .name("Fluent App")
-            .exec("fluentapp %F")
-            .desktop_file("/usr/share/applications/fluent.desktop")
-            .comment("Fluent interface test")
-            .icon("fluent-icon")
-            .as_xdg(2)
-            .with_action("test")
-            .build()
-            .unwrap();
-
-        assert_eq!(app.name, "Fluent App");
-        assert_eq!(app.exec, "fluentapp %F");
-        assert_eq!(app.comment, Some("Fluent interface test".to_string()));
-        assert_eq!(app.icon, Some("fluent-icon".to_string()));
         assert!(app.is_xdg);
+        assert!(!app.is_default);
         assert_eq!(app.xdg_priority, 2);
-        assert_eq!(app.action_id, Some("test".to_string()));
     }
 
     #[test]
-    fn test_application_entry_builder_default() {
-        let builder = ApplicationEntryBuilder::default();
-        assert!(builder.name.is_none());
-        assert!(builder.exec.is_none());
-        assert!(builder.desktop_file.is_none());
-        assert!(!builder.is_xdg);
-        assert!(!builder.is_default);
-        assert_eq!(builder.xdg_priority, -1);
+    fn test_application_entry_with_xdg_default() {
+        let entry = create_test_desktop_entry("DefaultApp", vec!["text/plain"]);
+        let path = PathBuf::from("/usr/share/applications/defaultapp.desktop");
+
+        let app = ApplicationEntry::from_desktop_entry(&entry, path).with_xdg(0, true);
+
+        assert!(app.is_xdg);
+        assert!(app.is_default);
+        assert_eq!(app.xdg_priority, 0);
     }
 
     #[test]
-    fn test_application_entry_builder_overwrite_values() {
-        let app = ApplicationEntryBuilder::new()
-            .name("First Name")
-            .name("Second Name") // Should overwrite
-            .exec("first %F")
-            .exec("second %F") // Should overwrite
-            .desktop_file("/first.desktop")
-            .desktop_file("/second.desktop") // Should overwrite
-            .build()
-            .unwrap();
+    fn test_application_entry_as_available_resets_flags() {
+        let entry = create_test_desktop_entry("ResetApp", vec!["text/plain"]);
+        let path = PathBuf::from("/usr/share/applications/resetapp.desktop");
 
-        assert_eq!(app.name, "Second Name");
-        assert_eq!(app.exec, "second %F");
-        assert_eq!(app.desktop_file, PathBuf::from("/second.desktop"));
-    }
+        let app = ApplicationEntry::from_desktop_entry(&entry, path)
+            .with_xdg(3, true)
+            .as_available();
 
-    #[test]
-    fn test_application_entry_builder_clone() {
-        let builder1 = ApplicationEntryBuilder::new()
-            .name("Clone Test")
-            .exec("clone %F");
-
-        let builder2 = builder1.clone();
-
-        let app1 = builder1.desktop_file("/first.desktop").build().unwrap();
-        let app2 = builder2.desktop_file("/second.desktop").build().unwrap();
-
-        assert_eq!(app1.name, app2.name);
-        assert_eq!(app1.exec, app2.exec);
-        assert_ne!(app1.desktop_file, app2.desktop_file);
+        assert!(!app.is_xdg);
+        assert!(!app.is_default);
+        assert_eq!(app.xdg_priority, -1);
     }
 }

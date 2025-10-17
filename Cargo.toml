@@ -30,6 +30,7 @@ nix = { version = "0.30", features = ["process"] }
 serial_test = "3.2.0"
 url = "2"
 walkdir = "2"
+shell-words = "1.1"
 gtk4 = { version = "0.9", optional = true }
 
 [dev-dependencies]

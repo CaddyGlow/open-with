@@ -13,32 +13,32 @@ impl ApplicationExecutor {
         Self
     }
 
-    pub fn execute(app: &ApplicationEntry, target: &LaunchTarget) -> Result<()> {
+    pub fn execute(&self, app: &ApplicationEntry, target: &LaunchTarget) -> Result<()> {
         let prepared_command = Self::prepare_command(&app.exec, target)?;
         Self::spawn_detached(prepared_command, target)
     }
 
     pub fn prepare_command(exec: &str, target: &LaunchTarget) -> Result<Vec<String>> {
-        let clean_exec = exec
-            .replace("%%", "%") // Handle escaped % first
-            .replace("%u", "")
-            .replace("%U", "")
-            .replace("%f", "")
-            .replace("%F", "")
-            .replace("%i", "")
-            .replace("%c", "")
-            .replace("%k", "")
-            .trim()
-            .to_string();
+        let raw_parts = shell_words::split(exec)
+            .map_err(|e| anyhow::anyhow!("Failed to parse exec command: {e}"))?;
 
-        if clean_exec.is_empty() {
-            return Err(anyhow::anyhow!("Empty exec command"));
+        let mut parts = Vec::with_capacity(raw_parts.len());
+        for part in raw_parts {
+            let mut cleaned = part.replace("%%", "%");
+            for placeholder in ["%u", "%U", "%f", "%F", "%i", "%c", "%k"] {
+                cleaned = cleaned.replace(placeholder, "");
+            }
+
+            if cleaned.is_empty() {
+                continue;
+            }
+
+            parts.push(cleaned);
         }
 
-        let mut parts: Vec<String> = clean_exec
-            .split_whitespace()
-            .map(std::string::ToString::to_string)
-            .collect();
+        if parts.is_empty() {
+            return Err(anyhow::anyhow!("Empty exec command"));
+        }
 
         // Add the file path as the last argument
         parts.push(target.as_command_argument().into_owned());
@@ -95,15 +95,17 @@ mod tests {
     use url::Url;
 
     fn create_test_application(exec: &str) -> ApplicationEntry {
-        crate::application_finder::ApplicationEntryBuilder::new()
-            .name("Test App")
-            .exec(exec)
-            .desktop_file("/usr/share/applications/testapp.desktop")
-            .comment("Test application")
-            .icon("testapp-icon")
-            .as_available()
-            .build()
-            .unwrap()
+        ApplicationEntry {
+            name: "Test App".to_string(),
+            exec: exec.to_string(),
+            desktop_file: PathBuf::from("/usr/share/applications/testapp.desktop"),
+            comment: Some("Test application".to_string()),
+            icon: Some("testapp-icon".to_string()),
+            is_xdg: false,
+            xdg_priority: -1,
+            is_default: false,
+            action_id: None,
+        }
     }
 
     #[test]
@@ -211,7 +213,8 @@ mod tests {
         let app = create_test_application("   %f %F   ");
         let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
 
-        let result = ApplicationExecutor::execute(&app, &target);
+        let executor = ApplicationExecutor::new();
+        let result = executor.execute(&app, &target);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Empty exec command");
     }
@@ -230,8 +233,7 @@ mod tests {
 
     #[test]
     fn test_prepare_command_with_quotes() {
-        // Test handling of commands that might have quotes (though our current
-        // implementation doesn't handle shell quoting)
+        // Test handling of commands that include quoted values
         let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
         let result =
             ApplicationExecutor::prepare_command("editor --title=\"My Editor\" %f", &target)
@@ -239,7 +241,7 @@ mod tests {
 
         assert_eq!(
             result,
-            vec!["editor", "--title=\"My", "Editor\"", "/home/user/test.txt"]
+            vec!["editor", "--title=My Editor", "/home/user/test.txt"]
         );
     }
 
