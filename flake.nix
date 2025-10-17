@@ -22,20 +22,41 @@
         crateName = cargoToml.package.name;
         crateVersion = cargoToml.package.version;
         nativeBuildInputs = with pkgs; [ pkg-config ];
-        buildInputs = with pkgs; [
-          atk
-          glib
-          gtk3
+
+        # GTK4 dependencies only needed for icon-picker feature
+        gtkBuildInputs = with pkgs; [
+          gtk4
+          graphene
         ];
+
+        # Base package without icon-picker
         cratePackage = pkgs.rustPlatform.buildRustPackage {
           pname = crateName;
           version = crateVersion;
           src = lib.cleanSource ./.;
           cargoLock.lockFile = ./Cargo.lock;
           cargoHash = lib.fakeSha256;
-          inherit nativeBuildInputs buildInputs;
+          inherit nativeBuildInputs;
+          buildInputs = [ ];
           meta = with lib; {
             description = "Small helper to launch applications with custom rules";
+            license = licenses.mit;
+            maintainers = [ ];
+          };
+        };
+
+        # Package with icon-picker feature enabled
+        cratePackageWithIconPicker = pkgs.rustPlatform.buildRustPackage {
+          pname = "${crateName}-with-icon-picker";
+          version = crateVersion;
+          src = lib.cleanSource ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+          cargoHash = lib.fakeSha256;
+          buildFeatures = [ "icon-picker" ];
+          inherit nativeBuildInputs;
+          buildInputs = gtkBuildInputs;
+          meta = with lib; {
+            description = "Small helper to launch applications with custom rules (with icon-picker)";
             license = licenses.mit;
             maintainers = [ ];
           };
@@ -45,6 +66,7 @@
       {
         packages = {
           default = cratePackage;
+          with-icon-picker = cratePackageWithIconPicker;
         };
 
         apps.default = {
@@ -65,7 +87,9 @@
             cargo-tarpaulin
           ];
 
-          inherit buildInputs nativeBuildInputs;
+          # Include GTK4 in dev shell for icon-picker development
+          buildInputs = gtkBuildInputs;
+          inherit nativeBuildInputs;
         };
 
         formatter = pkgs.alejandra;
