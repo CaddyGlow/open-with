@@ -1,8 +1,9 @@
 use crate::application_finder::ApplicationEntry;
+use crate::target::LaunchTarget;
 use anyhow::{Context, Result};
 use log::info;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 #[derive(Debug)]
@@ -13,12 +14,12 @@ impl ApplicationExecutor {
         Self
     }
 
-    pub fn execute(app: &ApplicationEntry, file_path: &Path) -> Result<()> {
-        let prepared_command = Self::prepare_command(&app.exec, file_path)?;
-        Self::spawn_detached(prepared_command, file_path)
+    pub fn execute(app: &ApplicationEntry, target: &LaunchTarget) -> Result<()> {
+        let prepared_command = Self::prepare_command(&app.exec, target)?;
+        Self::spawn_detached(prepared_command, target)
     }
 
-    pub fn prepare_command(exec: &str, file_path: &Path) -> Result<Vec<String>> {
+    pub fn prepare_command(exec: &str, target: &LaunchTarget) -> Result<Vec<String>> {
         let clean_exec = exec
             .replace("%%", "%") // Handle escaped % first
             .replace("%u", "")
@@ -41,12 +42,12 @@ impl ApplicationExecutor {
             .collect();
 
         // Add the file path as the last argument
-        parts.push(file_path.to_string_lossy().to_string());
+        parts.push(target.as_command_argument().into_owned());
 
         Ok(parts)
     }
 
-    fn spawn_detached(command_parts: Vec<String>, file_path: &Path) -> Result<()> {
+    fn spawn_detached(command_parts: Vec<String>, target: &LaunchTarget) -> Result<()> {
         if command_parts.is_empty() {
             return Err(anyhow::anyhow!("Empty command"));
         }
@@ -54,7 +55,7 @@ impl ApplicationExecutor {
         info!(
             "Executing: {} \"{}\"",
             command_parts.join(" "),
-            file_path.display()
+            target.as_command_argument()
         );
 
         let mut cmd = Command::new(&command_parts[0]);
@@ -91,6 +92,7 @@ impl Default for ApplicationExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use url::Url;
 
     fn create_test_application(exec: &str) -> ApplicationEntry {
         crate::application_finder::ApplicationEntryBuilder::new()
@@ -120,24 +122,23 @@ mod tests {
 
     #[test]
     fn test_prepare_command_basic() {
-        let file_path = Path::new("/home/user/test.txt");
-        let result = ApplicationExecutor::prepare_command("texteditor %f", file_path).unwrap();
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let result = ApplicationExecutor::prepare_command("texteditor %f", &target).unwrap();
 
         assert_eq!(result, vec!["texteditor", "/home/user/test.txt"]);
     }
 
     #[test]
     fn test_prepare_command_with_args() {
-        let file_path = Path::new("/home/user/test.txt");
-        let result =
-            ApplicationExecutor::prepare_command("editor --readonly %f", file_path).unwrap();
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let result = ApplicationExecutor::prepare_command("editor --readonly %f", &target).unwrap();
 
         assert_eq!(result, vec!["editor", "--readonly", "/home/user/test.txt"]);
     }
 
     #[test]
     fn test_prepare_command_clean_placeholders() {
-        let file_path = Path::new("/home/user/test.txt");
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
         let test_cases = vec![
             ("app %f", vec!["app", "/home/user/test.txt"]),
             ("app %F", vec!["app", "/home/user/test.txt"]),
@@ -150,23 +151,23 @@ mod tests {
         ];
 
         for (input, expected) in test_cases {
-            let result = ApplicationExecutor::prepare_command(input, file_path).unwrap();
+            let result = ApplicationExecutor::prepare_command(input, &target).unwrap();
             assert_eq!(result, expected, "Failed for input: {}", input);
         }
     }
 
     #[test]
     fn test_prepare_command_multiple_placeholders() {
-        let file_path = Path::new("/home/user/test.txt");
-        let result = ApplicationExecutor::prepare_command("app %f %u %F", file_path).unwrap();
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let result = ApplicationExecutor::prepare_command("app %f %u %F", &target).unwrap();
 
         assert_eq!(result, vec!["app", "/home/user/test.txt"]);
     }
 
     #[test]
     fn test_prepare_command_empty_after_cleaning() {
-        let file_path = Path::new("/home/user/test.txt");
-        let result = ApplicationExecutor::prepare_command("   %f %F   ", file_path);
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let result = ApplicationExecutor::prepare_command("   %f %F   ", &target);
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Empty exec command");
@@ -174,32 +175,33 @@ mod tests {
 
     #[test]
     fn test_prepare_command_with_whitespace() {
-        let file_path = Path::new("/home/user/test.txt");
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
         let result =
-            ApplicationExecutor::prepare_command("  editor   --flag   %f  ", file_path).unwrap();
+            ApplicationExecutor::prepare_command("  editor   --flag   %f  ", &target).unwrap();
 
         assert_eq!(result, vec!["editor", "--flag", "/home/user/test.txt"]);
     }
 
     #[test]
     fn test_prepare_command_complex_path() {
-        let file_path = Path::new("/home/user/Documents/My File.txt");
-        let result = ApplicationExecutor::prepare_command("editor %f", file_path).unwrap();
+        let target = LaunchTarget::File(PathBuf::from("/home/user/Documents/My File.txt"));
+        let result = ApplicationExecutor::prepare_command("editor %f", &target).unwrap();
 
         assert_eq!(result, vec!["editor", "/home/user/Documents/My File.txt"]);
     }
 
     #[test]
     fn test_prepare_command_no_placeholders() {
-        let file_path = Path::new("/home/user/test.txt");
-        let result = ApplicationExecutor::prepare_command("simple-editor", file_path).unwrap();
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let result = ApplicationExecutor::prepare_command("simple-editor", &target).unwrap();
 
         assert_eq!(result, vec!["simple-editor", "/home/user/test.txt"]);
     }
 
     #[test]
     fn test_spawn_detached_empty_command() {
-        let result = ApplicationExecutor::spawn_detached(vec![], Path::new("test.txt"));
+        let target = LaunchTarget::File(PathBuf::from("test.txt"));
+        let result = ApplicationExecutor::spawn_detached(vec![], &target);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Empty command");
     }
@@ -207,9 +209,9 @@ mod tests {
     #[test]
     fn test_execute_with_empty_exec() {
         let app = create_test_application("   %f %F   ");
-        let file_path = Path::new("/home/user/test.txt");
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
 
-        let result = ApplicationExecutor::execute(&app, file_path);
+        let result = ApplicationExecutor::execute(&app, &target);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Empty exec command");
     }
@@ -218,11 +220,11 @@ mod tests {
     fn test_execute_command_preparation() {
         // Test that execute properly prepares the command
         let app = create_test_application("echo %f");
-        let file_path = Path::new("/tmp/test.txt");
+        let target = LaunchTarget::File(PathBuf::from("/tmp/test.txt"));
 
         // We can't easily test the actual execution without side effects,
         // but we can test that the command preparation works
-        let prepared = ApplicationExecutor::prepare_command(&app.exec, file_path).unwrap();
+        let prepared = ApplicationExecutor::prepare_command(&app.exec, &target).unwrap();
         assert_eq!(prepared, vec!["echo", "/tmp/test.txt"]);
     }
 
@@ -230,9 +232,9 @@ mod tests {
     fn test_prepare_command_with_quotes() {
         // Test handling of commands that might have quotes (though our current
         // implementation doesn't handle shell quoting)
-        let file_path = Path::new("/home/user/test.txt");
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
         let result =
-            ApplicationExecutor::prepare_command("editor --title=\"My Editor\" %f", file_path)
+            ApplicationExecutor::prepare_command("editor --title=\"My Editor\" %f", &target)
                 .unwrap();
 
         assert_eq!(
@@ -243,26 +245,34 @@ mod tests {
 
     #[test]
     fn test_prepare_command_edge_cases() {
-        let file_path = Path::new("/test.txt");
+        let target = LaunchTarget::File(PathBuf::from("/test.txt"));
 
         // Test with only spaces and placeholders
-        let result = ApplicationExecutor::prepare_command("   %f   %F   ", file_path);
+        let result = ApplicationExecutor::prepare_command("   %f   %F   ", &target);
         assert!(result.is_err());
 
         // Test with just command name
-        let result = ApplicationExecutor::prepare_command("app", file_path).unwrap();
+        let result = ApplicationExecutor::prepare_command("app", &target).unwrap();
         assert_eq!(result, vec!["app", "/test.txt"]);
 
         // Test with escaped percent
-        let result = ApplicationExecutor::prepare_command("app %%f", file_path).unwrap();
+        let result = ApplicationExecutor::prepare_command("app %%f", &target).unwrap();
         assert_eq!(result, vec!["app", "/test.txt"]);
     }
 
     #[test]
+    fn test_prepare_command_with_uri_target() {
+        let target = LaunchTarget::Uri(Url::parse("https://example.com").unwrap());
+        let result = ApplicationExecutor::prepare_command("browser %u", &target).unwrap();
+
+        assert_eq!(result, vec!["browser", "https://example.com"]);
+    }
+
+    #[test]
     fn test_command_parts_ordering() {
-        let file_path = Path::new("/home/user/document.pdf");
+        let target = LaunchTarget::File(PathBuf::from("/home/user/document.pdf"));
         let result =
-            ApplicationExecutor::prepare_command("viewer --fullscreen --page=1 %f", file_path)
+            ApplicationExecutor::prepare_command("viewer --fullscreen --page=1 %f", &target)
                 .unwrap();
 
         assert_eq!(

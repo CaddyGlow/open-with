@@ -6,6 +6,7 @@ use std::env;
 use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
+use url::Url;
 
 mod application_finder;
 mod cache;
@@ -15,6 +16,7 @@ mod desktop_parser;
 mod executor;
 mod fuzzy_finder;
 mod mime_associations;
+mod target;
 mod template;
 mod xdg;
 
@@ -30,6 +32,7 @@ use desktop_parser::DesktopFile;
 use executor::ApplicationExecutor;
 use fuzzy_finder::FuzzyFinderRunner;
 use mime_associations::MimeAssociations;
+use target::LaunchTarget;
 
 #[derive(Debug)]
 struct OpenWith {
@@ -140,6 +143,36 @@ impl OpenWith {
         Box::new(cache)
     }
 
+    fn resolve_launch_target(raw: &str) -> Result<LaunchTarget> {
+        if let Ok(uri) = Url::parse(raw) {
+            if uri.scheme() == "file" {
+                let path = uri
+                    .to_file_path()
+                    .map_err(|_| anyhow::anyhow!("Invalid file URI: {raw}"))?;
+                let path = path
+                    .canonicalize()
+                    .with_context(|| format!("Failed to resolve file path: {}", path.display()))?;
+                return Ok(LaunchTarget::File(path));
+            }
+            return Ok(LaunchTarget::Uri(uri));
+        }
+
+        let path = PathBuf::from(raw);
+        let path = path
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve file path: {}", path.display()))?;
+        Ok(LaunchTarget::File(path))
+    }
+
+    fn mime_for_target(target: &LaunchTarget) -> String {
+        match target {
+            LaunchTarget::File(path) => mime_guess::from_path(path)
+                .first_or_octet_stream()
+                .to_string(),
+            LaunchTarget::Uri(uri) => format!("x-scheme-handler/{}", uri.scheme()),
+        }
+    }
+
     fn get_applications_for_mime(&self, mime_type: &str) -> Vec<ApplicationEntry> {
         self.application_finder
             .find_for_mime(mime_type, self.args.actions)
@@ -160,21 +193,28 @@ impl OpenWith {
             .run(applications, file_name, &fuzzer_name)
     }
 
-    fn execute_application(&self, app: &ApplicationEntry, file_path: &Path) -> Result<()> {
-        ApplicationExecutor::execute(app, file_path)
+    fn execute_application(&self, app: &ApplicationEntry, target: &LaunchTarget) -> Result<()> {
+        ApplicationExecutor::execute(app, target)
     }
 
     fn output_json(
         &self,
         applications: &[ApplicationEntry],
-        file_path: &Path,
+        target: &LaunchTarget,
         mime_type: &str,
     ) -> Result<()> {
         // Get XDG associations through the application finder
         let xdg_associations: Vec<String> = vec![]; // Simplified for now
 
+        let resource = target.as_command_argument().into_owned();
+        let target_kind = match target {
+            LaunchTarget::File(_) => "file",
+            LaunchTarget::Uri(_) => "uri",
+        };
+
         let output = serde_json::json!({
-            "file": file_path,
+            "target": resource,
+            "target_kind": target_kind,
             "mimetype": mime_type,
             "xdg_associations": xdg_associations,
             "applications": applications,
@@ -186,35 +226,29 @@ impl OpenWith {
 
     pub fn run(self) -> Result<()> {
         // Handle clear-cache early if no file is provided
-        if self.args.clear_cache && self.args.file.is_none() {
+        if self.args.clear_cache && self.args.target.is_none() {
             return Ok(());
         }
 
-        let file_path = if let Some(file) = &self.args.file {
-            file.canonicalize().context("Failed to resolve file path")?
+        let raw_target = if let Some(target) = &self.args.target {
+            target
         } else {
-            return Err(anyhow::anyhow!("No file provided"));
+            return Err(anyhow::anyhow!("No target provided"));
         };
 
-        if !file_path.exists() {
-            return Err(anyhow::anyhow!(
-                "File does not exist: {}",
-                file_path.display()
-            ));
+        let target = Self::resolve_launch_target(raw_target)?;
+
+        if let Some(path) = target.as_path() {
+            if !path.is_file() {
+                return Err(anyhow::anyhow!("Path is not a file: {}", path.display()));
+            }
+
+            info!("File: {}", path.display());
+        } else {
+            info!("URI: {}", target.as_command_argument());
         }
 
-        if !file_path.is_file() {
-            return Err(anyhow::anyhow!(
-                "Path is not a file: {}",
-                file_path.display()
-            ));
-        }
-
-        let mime_type = mime_guess::from_path(&file_path)
-            .first_or_octet_stream()
-            .to_string();
-
-        info!("File: {}", file_path.display());
+        let mime_type = Self::mime_for_target(&target);
         info!("MIME type: {mime_type}");
 
         let applications = self.get_applications_for_mime(&mime_type);
@@ -227,18 +261,14 @@ impl OpenWith {
         }
 
         if self.args.json {
-            self.output_json(&applications, &file_path, &mime_type)?;
+            self.output_json(&applications, &target, &mime_type)?;
         } else if io::stdout().is_terminal() {
-            let file_name = file_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("file");
-
-            if let Some(index) = self.run_fuzzy_finder(&applications, file_name)? {
-                self.execute_application(&applications[index], &file_path)?;
+            let display_name = target.display_name();
+            if let Some(index) = self.run_fuzzy_finder(&applications, display_name.as_ref())? {
+                self.execute_application(&applications[index], &target)?;
             }
         } else {
-            self.output_json(&applications, &file_path, &mime_type)?;
+            self.output_json(&applications, &target, &mime_type)?;
         }
 
         Ok(())
@@ -282,11 +312,12 @@ mod tests {
     use std::fs;
     use std::process::{Command, Stdio};
     use tempfile::TempDir;
+    use url::Url;
 
     /// Helper function to create test args with JSON output to avoid fuzzy finder
-    fn create_test_args_json(file: Option<PathBuf>) -> Args {
+    fn create_test_args_json(target: Option<PathBuf>) -> Args {
         Args {
-            file,
+            target: target.map(|p| p.to_string_lossy().to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: true, // Always use JSON in tests to avoid fuzzy finder
             actions: false,
@@ -417,7 +448,7 @@ Exec=test";
         // Test that OpenWith::new succeeds when clear_cache is true
         // This should work even in environments with no desktop files
         let args = Args {
-            file: Some(PathBuf::from("test.txt")),
+            target: Some("test.txt".to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: false,
             actions: false,
@@ -499,18 +530,41 @@ Exec=test";
             .build()
             .unwrap()];
 
-        let file_path = PathBuf::from("test.txt");
         let mime_type = "text/plain";
+        let target = LaunchTarget::File(PathBuf::from("test.txt"));
 
         // This will print to stdout, but we're mainly testing it doesn't panic
-        let result = app.output_json(&applications, &file_path, mime_type);
+        let result = app.output_json(&applications, &target, mime_type);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_resolve_launch_target_with_uri() {
+        let target = OpenWith::resolve_launch_target("https://example.com").unwrap();
+        assert!(matches!(target, LaunchTarget::Uri(_)));
+        assert_eq!(OpenWith::mime_for_target(&target), "x-scheme-handler/https");
+    }
+
+    #[test]
+    fn test_resolve_launch_target_with_file_uri() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("uri_test.txt");
+        fs::write(&file_path, "content").unwrap();
+        let uri = Url::from_file_path(&file_path).expect("valid file uri");
+
+        let target = OpenWith::resolve_launch_target(uri.as_str()).unwrap();
+        match target {
+            LaunchTarget::File(path) => {
+                assert_eq!(path, file_path.canonicalize().unwrap());
+            }
+            LaunchTarget::Uri(_) => panic!("expected file target"),
+        }
     }
 
     #[test]
     fn test_run_with_no_file() {
         let args = Args {
-            file: None,
+            target: None,
             fuzzer: FuzzyFinder::Auto,
             json: false,
             actions: false,
@@ -523,13 +577,13 @@ Exec=test";
         let app = OpenWith::new(args).unwrap();
         let result = app.run();
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "No file provided");
+        assert_eq!(result.unwrap_err().to_string(), "No target provided");
     }
 
     #[test]
     fn test_run_with_nonexistent_file() {
         let args = Args {
-            file: Some(PathBuf::from("/nonexistent/file.txt")),
+            target: Some("/nonexistent/file.txt".to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: false,
             actions: false,
@@ -556,7 +610,7 @@ Exec=test";
         let _cache_env = CacheEnvGuard::set(&cache_file);
 
         let args = Args {
-            file: None,
+            target: None,
             fuzzer: FuzzyFinder::Auto,
             json: false,
             actions: false,
@@ -729,7 +783,7 @@ Exec=test";
         let temp_dir = TempDir::new().unwrap();
 
         let args = Args {
-            file: Some(temp_dir.path().to_path_buf()),
+            target: Some(temp_dir.path().to_string_lossy().to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: false,
             actions: false,
@@ -755,7 +809,7 @@ Exec=test";
         fs::write(&temp_file, "test content").unwrap();
 
         let args = Args {
-            file: Some(temp_file.clone()),
+            target: Some(temp_file.to_string_lossy().to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: false,
             actions: false,
@@ -823,7 +877,7 @@ Exec=test";
     fn test_run_fuzzy_finder_auto_detection() {
         // Test fuzzy finder auto-detection logic without actually running it
         let _args = Args {
-            file: Some(PathBuf::from("test.txt")),
+            target: Some("test.txt".to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: true, // Use JSON to avoid running fuzzy finder
             actions: false,
@@ -965,7 +1019,7 @@ MimeType=text/plain;";
         fs::write(&test_file, "test content").unwrap();
 
         let args = Args {
-            file: Some(test_file),
+            target: Some(test_file.to_string_lossy().to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: true, // Use JSON to avoid fuzzy finder
             actions: false,

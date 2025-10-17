@@ -21,12 +21,19 @@
         cargoToml = lib.importTOML ./Cargo.toml;
         crateName = cargoToml.package.name;
         crateVersion = cargoToml.package.version;
+        nativeBuildInputs = with pkgs; [ pkg-config ];
+        buildInputs = with pkgs; [
+          atk
+          glib
+          gtk3
+        ];
         cratePackage = pkgs.rustPlatform.buildRustPackage {
           pname = crateName;
           version = crateVersion;
           src = lib.cleanSource ./.;
           cargoLock.lockFile = ./Cargo.lock;
           cargoHash = lib.fakeSha256;
+          inherit nativeBuildInputs buildInputs;
           meta = with lib; {
             description = "Small helper to launch applications with custom rules";
             license = licenses.mit;
@@ -34,12 +41,6 @@
           };
         };
 
-        nativeBuildInputs = with pkgs; [ pkg-config ];
-        buildInputs = with pkgs; [
-          atk
-          glib
-          gtk3 # whatever your crate actually needs alongside atk
-        ];
       in
       {
         packages = {
@@ -62,11 +63,9 @@
             cargo-deny
             cargo-audit
             cargo-tarpaulin
-            pkg-config
-            atk
-            glib
-            gtk3
           ];
+
+          inherit buildInputs nativeBuildInputs;
         };
 
         formatter = pkgs.alejandra;

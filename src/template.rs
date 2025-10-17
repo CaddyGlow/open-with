@@ -41,11 +41,11 @@ impl TemplateEngine {
                     // Single brace - look for variable substitution
                     let start = i;
                     i += 1;
-                    
+
                     // Find the closing brace
                     let mut var_name = String::new();
                     let mut found_closing = false;
-                    
+
                     while i < chars.len() {
                         if chars[i] == '}' {
                             found_closing = true;
@@ -54,7 +54,7 @@ impl TemplateEngine {
                         var_name.push(chars[i]);
                         i += 1;
                     }
-                    
+
                     if found_closing && self.variables.contains_key(&var_name) {
                         // Substitute the variable
                         result.push_str(self.variables.get(&var_name).unwrap());

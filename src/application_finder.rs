@@ -167,10 +167,7 @@ impl fmt::Debug for ApplicationFinder {
 }
 
 impl ApplicationFinder {
-    pub fn new(
-        desktop_cache: Box<dyn DesktopCache>,
-        mime_associations: MimeAssociations,
-    ) -> Self {
+    pub fn new(desktop_cache: Box<dyn DesktopCache>, mime_associations: MimeAssociations) -> Self {
         Self {
             desktop_cache,
             mime_associations,
@@ -208,7 +205,12 @@ impl ApplicationFinder {
                         if include_actions {
                             for (action_id, action) in &desktop_file.actions {
                                 if let Ok(action_app) = ApplicationEntryBuilder::new()
-                                    .from_desktop_action(entry, action, action_id.clone(), path.clone())
+                                    .from_desktop_action(
+                                        entry,
+                                        action,
+                                        action_id.clone(),
+                                        path.clone(),
+                                    )
                                     .as_xdg(priority_i32)
                                     .build()
                                 {
@@ -243,7 +245,12 @@ impl ApplicationFinder {
                         if include_actions {
                             for (action_id, action) in &desktop_file.actions {
                                 if let Ok(action_app) = ApplicationEntryBuilder::new()
-                                    .from_desktop_action(entry, action, action_id.clone(), path.clone())
+                                    .from_desktop_action(
+                                        entry,
+                                        action,
+                                        action_id.clone(),
+                                        path.clone(),
+                                    )
                                     .as_available()
                                     .build()
                                 {
@@ -308,7 +315,10 @@ mod tests {
         ApplicationEntryBuilder::new()
             .name(name)
             .exec(format!("{} %F", name.to_lowercase()))
-            .desktop_file(PathBuf::from(format!("/usr/share/applications/{}.desktop", name.to_lowercase())))
+            .desktop_file(PathBuf::from(format!(
+                "/usr/share/applications/{}.desktop",
+                name.to_lowercase()
+            )))
             .comment(format!("Test application {}", name))
             .icon(format!("{}-icon", name.to_lowercase()))
             .as_available()
@@ -592,7 +602,10 @@ mod tests {
 
         assert_eq!(app.name, "Test App");
         assert_eq!(app.exec, "testapp %F");
-        assert_eq!(app.desktop_file, PathBuf::from("/usr/share/applications/test.desktop"));
+        assert_eq!(
+            app.desktop_file,
+            PathBuf::from("/usr/share/applications/test.desktop")
+        );
         assert!(!app.is_xdg);
         assert!(!app.is_default);
         assert_eq!(app.xdg_priority, -1);
@@ -775,11 +788,11 @@ mod tests {
     fn test_application_entry_builder_overwrite_values() {
         let app = ApplicationEntryBuilder::new()
             .name("First Name")
-            .name("Second Name")  // Should overwrite
+            .name("Second Name") // Should overwrite
             .exec("first %F")
-            .exec("second %F")    // Should overwrite
+            .exec("second %F") // Should overwrite
             .desktop_file("/first.desktop")
-            .desktop_file("/second.desktop")  // Should overwrite
+            .desktop_file("/second.desktop") // Should overwrite
             .build()
             .unwrap();
 

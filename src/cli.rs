@@ -1,5 +1,4 @@
 use clap::{Parser, ValueEnum};
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, ValueEnum, PartialEq)]
 pub enum FuzzyFinder {
@@ -16,8 +15,8 @@ pub enum FuzzyFinder {
     long_about = None
 )]
 pub struct Args {
-    /// File to open (not required when using --build-info or --clear-cache)
-    pub file: Option<PathBuf>,
+    /// Resource to open; accepts filesystem paths or URIs.
+    pub target: Option<String>,
 
     /// Fuzzy finder to use
     #[arg(long, value_enum, default_value = "auto")]
@@ -52,18 +51,18 @@ impl Args {
     /// Validate arguments and return errors for invalid combinations
     #[allow(dead_code)]
     pub fn validate(&self) -> Result<(), String> {
-        if !self.build_info && !self.clear_cache && !self.generate_config && self.file.is_none() {
+        if !self.build_info && !self.clear_cache && !self.generate_config && self.target.is_none() {
             return Err(
-                "File argument is required unless using --build-info, --clear-cache, or --generate-config".to_string(),
+                "A target argument is required unless using --build-info, --clear-cache, or --generate-config".to_string(),
             );
         }
         Ok(())
     }
 
-    /// Get the file path, ensuring it exists when needed
+    /// Get the provided target (file path or URI) as a borrowed string.
     #[allow(dead_code)]
-    pub fn get_file(&self) -> Option<&PathBuf> {
-        self.file.as_ref()
+    pub fn get_target(&self) -> Option<&str> {
+        self.target.as_deref()
     }
 }
 
@@ -121,7 +120,7 @@ mod tests {
     fn test_args_parsing_with_file() {
         // Test basic file argument
         let args = Args::try_parse_from(["open-with", "test.txt"]).unwrap();
-        assert_eq!(args.file, Some(PathBuf::from("test.txt")));
+        assert_eq!(args.target.as_deref(), Some("test.txt"));
         assert_eq!(args.fuzzer, FuzzyFinder::Auto);
         assert!(!args.json);
         assert!(!args.actions);
@@ -135,7 +134,7 @@ mod tests {
     fn test_args_parsing_build_info_only() {
         // Test --build-info without file
         let args = Args::try_parse_from(["open-with", "--build-info"]).unwrap();
-        assert_eq!(args.file, None);
+        assert_eq!(args.target, None);
         assert!(args.build_info);
 
         // Should pass validation
@@ -146,7 +145,7 @@ mod tests {
     fn test_args_validation_missing_file() {
         // Test missing file without --build-info or --clear-cache should fail validation
         let args = Args::try_parse_from(["open-with"]).unwrap();
-        assert_eq!(args.file, None);
+        assert_eq!(args.target, None);
         assert!(!args.build_info);
         assert!(!args.clear_cache);
 
@@ -158,7 +157,7 @@ mod tests {
     fn test_args_validation_clear_cache_only() {
         // Test --clear-cache without file should pass validation
         let args = Args::try_parse_from(["open-with", "--clear-cache"]).unwrap();
-        assert_eq!(args.file, None);
+        assert_eq!(args.target, None);
         assert!(args.clear_cache);
 
         // Should pass validation
@@ -169,7 +168,7 @@ mod tests {
     fn test_args_validation_generate_config_only() {
         // Test --generate-config without file should pass validation
         let args = Args::try_parse_from(["open-with", "--generate-config"]).unwrap();
-        assert_eq!(args.file, None);
+        assert_eq!(args.target, None);
         assert!(args.generate_config);
 
         // Should pass validation
@@ -192,7 +191,7 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(args.file, Some(PathBuf::from("test.txt")));
+        assert_eq!(args.target.as_deref(), Some("test.txt"));
         assert_eq!(args.fuzzer, FuzzyFinder::Fzf);
         assert!(args.json);
         assert!(args.actions);
@@ -236,12 +235,12 @@ mod tests {
     }
 
     #[test]
-    fn test_get_file_method() {
+    fn test_get_target_method() {
         let args_with_file = Args::try_parse_from(["open-with", "test.txt"]).unwrap();
-        assert_eq!(args_with_file.get_file(), Some(&PathBuf::from("test.txt")));
+        assert_eq!(args_with_file.get_target(), Some("test.txt"));
 
         let args_without_file = Args::try_parse_from(["open-with", "--build-info"]).unwrap();
-        assert_eq!(args_without_file.get_file(), None);
+        assert_eq!(args_without_file.get_target(), None);
     }
 
     #[test]
@@ -296,7 +295,7 @@ mod tests {
     fn test_build_info_without_other_args() {
         let args = Args::try_parse_from(["open-with", "--build-info"]).unwrap();
         assert!(args.build_info);
-        assert_eq!(args.file, None);
+        assert_eq!(args.target, None);
         assert_eq!(args.fuzzer, FuzzyFinder::Auto); // Should still have default
         assert!(!args.generate_config);
     }
