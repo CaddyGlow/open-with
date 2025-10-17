@@ -17,6 +17,8 @@ mod executor;
 mod fuzzy_finder;
 mod mime_associations;
 mod mimeapps;
+mod regex_handlers;
+mod selector;
 mod target;
 mod template;
 mod xdg;
@@ -35,14 +37,18 @@ use fuzzy_finder::FuzzyFinderRunner;
 use itertools::Itertools;
 use mime_associations::MimeAssociations;
 use mimeapps::MimeApps;
+use regex_handlers::RegexHandlerStore;
+use selector::SelectorRunner;
 use target::LaunchTarget;
 
 #[derive(Debug)]
 struct OpenWith {
     application_finder: ApplicationFinder,
     fuzzy_finder_runner: FuzzyFinderRunner,
+    selector_runner: SelectorRunner,
     executor: ApplicationExecutor,
     config: config::Config,
+    regex_handlers: RegexHandlerStore,
     args: OpenArgs,
 }
 
@@ -54,22 +60,42 @@ impl OpenWith {
 
         let desktop_cache = Self::load_desktop_cache();
         let mime_associations = MimeAssociations::load();
-        let config = config::Config::load(args.config.clone()).with_context(|| {
+        let mut config = config::Config::load(args.config.clone()).with_context(|| {
             args.config
                 .as_ref()
                 .map(|path| format!("Failed to load configuration from {}", path.display()))
                 .unwrap_or_else(|| "Failed to load configuration".to_string())
         })?;
 
+        if let Some(enable_selector) = args.enable_selector {
+            config.selector.enable_selector = enable_selector;
+        }
+
+        if let Some(selector_command) = args.selector_command.clone() {
+            config.selector.selector = selector_command;
+        }
+
+        if let Some(term_exec_args) = args.term_exec_args.clone() {
+            config.selector.term_exec_args = if term_exec_args.is_empty() {
+                None
+            } else {
+                Some(term_exec_args)
+            };
+        }
+
         let application_finder = ApplicationFinder::new(desktop_cache, mime_associations);
         let fuzzy_finder_runner = FuzzyFinderRunner::new();
+        let selector_runner = SelectorRunner::new();
         let executor = ApplicationExecutor::new();
+        let regex_handlers = RegexHandlerStore::load(None)?;
 
         Ok(Self {
             application_finder,
             fuzzy_finder_runner,
+            selector_runner,
             executor,
             config,
+            regex_handlers,
             args,
         })
     }
@@ -281,6 +307,11 @@ impl OpenWith {
         info!("MIME type: {mime_type}");
 
         let applications = self.get_applications_for_mime(&mime_type);
+        debug!(
+            "Found {} application(s); regex handler count: {}",
+            applications.len(),
+            self.regex_handlers.len()
+        );
 
         if applications.is_empty() {
             return Err(anyhow::anyhow!(
@@ -292,8 +323,24 @@ impl OpenWith {
         if self.args.json {
             self.output_json(&applications, &target, &mime_type)?;
         } else if io::stdout().is_terminal() {
-            // If only one application and auto-open is enabled, open it directly
-            if applications.len() == 1 && self.args.auto_open_single {
+            if self.config.selector.enable_selector {
+                if applications.len() == 1 && self.args.auto_open_single {
+                    info!("Auto-opening the only available application");
+                    self.execute_application(&applications[0], &target)?;
+                } else {
+                    match self
+                        .selector_runner
+                        .run(&self.config.selector, &applications)?
+                    {
+                        Some(index) => {
+                            self.execute_application(&applications[index], &target)?;
+                        }
+                        None => {
+                            info!("Selector cancelled; no application launched");
+                        }
+                    }
+                }
+            } else if applications.len() == 1 && self.args.auto_open_single {
                 info!("Auto-opening the only available application");
                 self.execute_application(&applications[0], &target)?;
             } else {
@@ -500,6 +547,9 @@ mod tests {
             generate_config: false,
             config: None,
             auto_open_single: false,
+            enable_selector: None,
+            selector_command: None,
+            term_exec_args: None,
         }
     }
 
@@ -779,6 +829,9 @@ Exec=test";
             generate_config: false,
             config: None,
             auto_open_single: false,
+            enable_selector: None,
+            selector_command: None,
+            term_exec_args: None,
         };
 
         // Initialize env_logger for debugging if test fails
@@ -899,6 +952,9 @@ Exec=test";
             generate_config: false,
             config: None,
             auto_open_single: false,
+            enable_selector: None,
+            selector_command: None,
+            term_exec_args: None,
         };
 
         let app = OpenWith::new(args).unwrap();
@@ -920,6 +976,9 @@ Exec=test";
             generate_config: false,
             config: None,
             auto_open_single: false,
+            enable_selector: None,
+            selector_command: None,
+            term_exec_args: None,
         };
 
         let app = OpenWith::new(args).unwrap();
@@ -949,6 +1008,9 @@ Exec=test";
             generate_config: false,
             config: None,
             auto_open_single: false,
+            enable_selector: None,
+            selector_command: None,
+            term_exec_args: None,
         };
 
         // This should succeed even if no cache file exists
@@ -1124,6 +1186,9 @@ Exec=test";
             generate_config: false,
             config: None,
             auto_open_single: false,
+            enable_selector: None,
+            selector_command: None,
+            term_exec_args: None,
         };
 
         let app = OpenWith::new(args).unwrap();
@@ -1152,6 +1217,9 @@ Exec=test";
             generate_config: false,
             config: None,
             auto_open_single: false,
+            enable_selector: None,
+            selector_command: None,
+            term_exec_args: None,
         };
 
         let _app = OpenWith::new(args).unwrap();
@@ -1222,6 +1290,9 @@ Exec=test";
             generate_config: false,
             config: None,
             auto_open_single: false,
+            enable_selector: None,
+            selector_command: None,
+            term_exec_args: None,
         };
 
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
@@ -1388,6 +1459,9 @@ MimeType=text/plain;";
             generate_config: false,
             config: None,
             auto_open_single: false,
+            enable_selector: None,
+            selector_command: None,
+            term_exec_args: None,
         };
 
         // Create an app - it will have empty cache for unknown mime types

@@ -64,6 +64,18 @@ pub struct OpenArgs {
     /// Automatically open if only one application is available (skip picker)
     #[arg(long)]
     pub auto_open_single: bool,
+
+    /// Override selector enablement (true/false)
+    #[arg(long)]
+    pub enable_selector: Option<bool>,
+
+    /// Override selector command (e.g. `rofi -dmenu`)
+    #[arg(long = "selector-command")]
+    pub selector_command: Option<String>,
+
+    /// Override terminal exec args passed to selector commands
+    #[arg(long = "term-exec-args")]
+    pub term_exec_args: Option<String>,
 }
 
 #[derive(Subcommand, Debug, Clone)]

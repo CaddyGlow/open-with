@@ -18,7 +18,7 @@ pub struct SelectorConfig {
 impl Default for SelectorConfig {
     fn default() -> Self {
         Self {
-            enable_selector: false,
+            enable_selector: true,
             selector: "rofi -dmenu -i -p 'Open With: '".into(),
             term_exec_args: Some("-e".into()),
             expand_wildcards: false,
@@ -258,7 +258,7 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
 
-        assert!(!config.selector.enable_selector);
+        assert!(config.selector.enable_selector);
         assert_eq!(config.selector.selector, "rofi -dmenu -i -p 'Open With: '");
         // Should have default fzf and fuzzel configs
         assert!(config.fuzzy_finders.contains_key("fzf"));
