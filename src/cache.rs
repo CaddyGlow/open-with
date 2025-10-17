@@ -15,12 +15,14 @@ pub trait DesktopCache {
     fn save(&self) -> Result<()>;
 
     /// Get a desktop file from the cache
+    #[allow(dead_code)]
     fn get(&self, path: &Path) -> Option<&DesktopFile>;
 
     /// Insert a desktop file into the cache
     fn insert(&mut self, path: PathBuf, desktop_file: DesktopFile);
 
     /// Remove a desktop file from the cache
+    #[allow(dead_code)]
     fn remove(&mut self, path: &Path) -> Option<DesktopFile>;
 
     /// Clear all entries from the cache
@@ -97,6 +99,7 @@ impl FileSystemCache {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_max_age(cache_path: PathBuf, max_age: Duration) -> Self {
         Self {
             cache_path,

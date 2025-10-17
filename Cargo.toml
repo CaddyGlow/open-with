@@ -1,4 +1,3 @@
-#[allow(clippy::unnecessary_debug_formatting)]
 [package]
 name = "open-with"
 version = "0.1.0"

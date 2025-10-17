@@ -150,17 +150,15 @@ fn create_icon_row(
     let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
     // Load icon
-    if let Ok(pixbuf) = icon_theme.load_icon(
+    if let Ok(Some(pixbuf)) = icon_theme.load_icon(
         name,
         24,
         gtk::IconLookupFlags::FORCE_SIZE
             | gtk::IconLookupFlags::GENERIC_FALLBACK
             | gtk::IconLookupFlags::USE_BUILTIN,
     ) {
-        if let Some(pixbuf) = pixbuf {
-            let image = gtk::Image::from_pixbuf(Some(&pixbuf));
-            hbox.pack_start(&image, false, false, 6);
-        }
+        let image = gtk::Image::from_pixbuf(Some(&pixbuf));
+        hbox.pack_start(&image, false, false, 6);
     }
 
     let label = gtk::Label::new(Some(name));

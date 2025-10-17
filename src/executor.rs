@@ -3,7 +3,6 @@ use crate::target::LaunchTarget;
 use anyhow::{Context, Result};
 use log::info;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 #[derive(Debug)]
@@ -92,6 +91,7 @@ impl Default for ApplicationExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use url::Url;
 
     fn create_test_application(exec: &str) -> ApplicationEntry {
@@ -265,7 +265,8 @@ mod tests {
         let target = LaunchTarget::Uri(Url::parse("https://example.com").unwrap());
         let result = ApplicationExecutor::prepare_command("browser %u", &target).unwrap();
 
-        assert_eq!(result, vec!["browser", "https://example.com"]);
+        // URL parser adds trailing slash for URLs without paths
+        assert_eq!(result, vec!["browser", "https://example.com/"]);
     }
 
     #[test]

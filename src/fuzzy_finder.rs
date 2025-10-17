@@ -1,4 +1,4 @@
-use crate::application_finder::{ApplicationEntry, ApplicationEntryBuilder};
+use crate::application_finder::ApplicationEntry;
 use crate::config::Config;
 use crate::template::TemplateEngine;
 use anyhow::{Context, Result};
@@ -141,7 +141,7 @@ impl FuzzyFinderRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application_finder::ApplicationEntry;
+    use crate::application_finder::{ApplicationEntry, ApplicationEntryBuilder};
 
     fn create_test_application() -> ApplicationEntry {
         ApplicationEntryBuilder::new()

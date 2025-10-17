@@ -86,16 +86,19 @@ impl TemplateEngine {
     }
 
     /// Clear all variables
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.variables.clear();
     }
 
     /// Check if a variable is set
+    #[allow(dead_code)]
     pub fn has_variable(&self, key: &str) -> bool {
         self.variables.contains_key(key)
     }
 
     /// Get the value of a variable
+    #[allow(dead_code)]
     pub fn get_variable(&self, key: &str) -> Option<&str> {
         self.variables.get(key).map(std::string::String::as_str)
     }

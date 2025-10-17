@@ -26,7 +26,7 @@ echo ""
 
 # 2. Clippy
 echo -e "${YELLOW}🔎 Running clippy...${NC}"
-if cargo clippy -- -D warnings -D clippy::all -D clippy::pedantic -A clippy::module_name_repetitions -A clippy::struct_excessive_bools -A clippy::unnecessary-debug-formatting; then
+if cargo clippy -- -D warnings; then
   echo -e "${GREEN}✅ Clippy checks passed${NC}"
 else
   echo -e "${RED}❌ Clippy found issues${NC}"

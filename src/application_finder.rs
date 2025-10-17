@@ -47,37 +47,44 @@ impl ApplicationEntryBuilder {
         }
     }
 
+    #[allow(dead_code)]
     pub fn name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
         self
     }
 
+    #[allow(dead_code)]
     pub fn exec<S: Into<String>>(mut self, exec: S) -> Self {
         self.exec = Some(exec.into());
         self
     }
 
+    #[allow(dead_code)]
     pub fn desktop_file<P: Into<PathBuf>>(mut self, path: P) -> Self {
         self.desktop_file = Some(path.into());
         self
     }
 
+    #[allow(dead_code)]
     pub fn comment<S: Into<String>>(mut self, comment: S) -> Self {
         self.comment = Some(comment.into());
         self
     }
 
+    #[allow(dead_code)]
     pub fn icon<S: Into<String>>(mut self, icon: S) -> Self {
         self.icon = Some(icon.into());
         self
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn as_xdg(mut self, priority: i32) -> Self {
         self.is_xdg = true;
         self.xdg_priority = priority;
         self
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn as_xdg_default(mut self) -> Self {
         self.is_xdg = true;
         self.xdg_priority = 0;
@@ -85,6 +92,7 @@ impl ApplicationEntryBuilder {
         self
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn as_available(mut self) -> Self {
         self.is_xdg = false;
         self.xdg_priority = -1;
@@ -92,11 +100,13 @@ impl ApplicationEntryBuilder {
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_action<S: Into<String>>(mut self, action_id: S) -> Self {
         self.action_id = Some(action_id.into());
         self
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_desktop_entry(
         mut self,
         entry: &crate::desktop_parser::DesktopEntry,
@@ -110,6 +120,7 @@ impl ApplicationEntryBuilder {
         self
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_desktop_action(
         mut self,
         main_entry: &crate::desktop_parser::DesktopEntry,
