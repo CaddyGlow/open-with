@@ -7,10 +7,6 @@ pub struct MimeAssociations {
 }
 
 impl MimeAssociations {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     // Also add this for testing
     #[cfg(test)]
     pub fn with_associations(associations: HashMap<String, Vec<String>>) -> Self {

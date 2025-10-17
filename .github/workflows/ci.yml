@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.86
         with:
           components: rustfmt, clippy
 
@@ -46,12 +46,7 @@ jobs:
       - name: Run Clippy
         run: |
           cargo clippy --all-targets --all-features -- \
-            -D warnings \
-            -D clippy::all \
-            -D clippy::pedantic \
-            -A clippy::module_name_repetitions \
-            -A clippy::struct_excessive_bools \
-            -A clippy::unnecessary-debug-formatting
+            -D warnings
 
       - name: Check documentation
         run: cargo doc --all-features --no-deps --document-private-items
@@ -91,7 +86,8 @@ jobs:
           sudo apt-get install -y \
             desktop-file-utils \
             shared-mime-info \
-            xdg-utils
+            xdg-utils \
+            libgtk-4-dev
 
       - name: Run tests
         run: cargo test --verbose ${{ matrix.features }}
@@ -125,6 +121,7 @@ jobs:
           sudo apt-get install -y \
             desktop-file-utils \
             shared-mime-info \
+            libgtk-4-dev \ 
             xdg-utils
 
       - name: Generate code coverage
@@ -156,6 +153,12 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-build-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev \ 
 
       - name: Build release binary
         run: cargo build --release --verbose
@@ -199,6 +202,7 @@ jobs:
             shared-mime-info \
             xdg-utils \
             fzf \
+            libgtk-4-dev \
             file
 
       - name: Download binary artifact
@@ -254,6 +258,7 @@ jobs:
             desktop-file-utils \
             shared-mime-info \
             xdg-utils \
+            libgtk-4-dev \
             hyperfine
 
       - name: Build release

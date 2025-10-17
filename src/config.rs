@@ -1,10 +1,33 @@
 use anyhow::{Context, Result};
+use log::debug;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use toml::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SelectorConfig {
+    pub enable_selector: bool,
+    pub selector: String,
+    pub term_exec_args: Option<String>,
+    pub expand_wildcards: bool,
+}
+
+impl Default for SelectorConfig {
+    fn default() -> Self {
+        Self {
+            enable_selector: false,
+            selector: "rofi -dmenu -i -p 'Open With: '".into(),
+            term_exec_args: Some("-e".into()),
+            expand_wildcards: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FuzzyFinderConfig {
     pub command: String,
     pub args: Vec<String>,
@@ -17,8 +40,27 @@ pub struct FuzzyFinderConfig {
     pub header_template: Option<String>,
 }
 
+impl Default for FuzzyFinderConfig {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            entry_template: String::new(),
+            marker_default: None,
+            marker_xdg: None,
+            marker_available: None,
+            prompt_template: None,
+            header_template: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
+    #[serde(flatten)]
+    pub selector: SelectorConfig,
     pub fuzzy_finders: HashMap<String, FuzzyFinderConfig>,
     pub marker_default: String,
     pub marker_xdg: String,
@@ -77,6 +119,7 @@ impl Default for Config {
         );
 
         Self {
+            selector: SelectorConfig::default(),
             fuzzy_finders,
             marker_default: "★ ".to_string(),
             marker_xdg: "▶ ".to_string(),
@@ -88,25 +131,65 @@ impl Default for Config {
 }
 
 impl Config {
+    fn load_from_path(path: &Path) -> Result<Self> {
+        let contents = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file at {}", path.display()))?;
+
+        let config = toml::from_str::<Config>(&contents)
+            .with_context(|| format!("Failed to parse config file at {}", path.display()))?;
+
+        Ok(config)
+    }
+
+    fn load_handlr_selector_config() -> Result<Option<SelectorConfig>> {
+        let handlr_path = Self::handlr_config_path();
+
+        if !handlr_path.exists() {
+            return Ok(None);
+        }
+
+        let contents = match fs::read_to_string(&handlr_path) {
+            Ok(contents) => contents,
+            Err(err) => {
+                debug!(
+                    "Failed to read handlr config at {}: {}",
+                    handlr_path.display(),
+                    err
+                );
+                return Ok(None);
+            }
+        };
+
+        match toml::from_str::<HandlrCompatConfig>(&contents) {
+            Ok(raw) => Ok(Some(raw.into_selector_config())),
+            Err(err) => {
+                debug!(
+                    "Failed to parse handlr config at {}: {}",
+                    handlr_path.display(),
+                    err
+                );
+                Ok(None)
+            }
+        }
+    }
+
     pub fn load(custom_path: Option<PathBuf>) -> Result<Self> {
         if let Some(path) = custom_path {
-            let contents = fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read config file at {}", path.display()))?;
-
-            let config = toml::from_str::<Config>(&contents)
-                .with_context(|| format!("Failed to parse config file at {}", path.display()))?;
-
-            return Ok(config);
+            return Self::load_from_path(&path);
         }
 
         let config_path = Self::config_path();
 
         if config_path.exists() {
-            if let Ok(contents) = fs::read_to_string(&config_path) {
-                if let Ok(config) = toml::from_str::<Config>(&contents) {
-                    return Ok(config);
-                }
+            if let Ok(config) = Self::load_from_path(&config_path) {
+                return Ok(config);
             }
+        }
+
+        if let Some(selector) = Self::load_handlr_selector_config()? {
+            let mut config = Self::default();
+            config.selector = selector;
+            return Ok(config);
         }
 
         // Return default config if file doesn't exist or can't be parsed
@@ -131,6 +214,13 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("open-with")
             .join("config.toml")
+    }
+
+    pub fn handlr_config_path() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("handlr")
+            .join("handlr.toml")
     }
 
     pub fn get_fuzzy_finder(&self, name: &str) -> Option<&FuzzyFinderConfig> {
@@ -183,6 +273,8 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
 
+        assert!(!config.selector.enable_selector);
+        assert_eq!(config.selector.selector, "rofi -dmenu -i -p 'Open With: '");
         // Should have default fzf and fuzzel configs
         assert!(config.fuzzy_finders.contains_key("fzf"));
         assert!(config.fuzzy_finders.contains_key("fuzzel"));
@@ -274,5 +366,95 @@ mod tests {
             message.contains("Failed to parse config file"),
             "unexpected error message: {message}"
         );
+    }
+
+    #[test]
+    fn test_fallback_to_handlr_config() {
+        use std::env;
+        use std::ffi::OsString;
+
+        struct ConfigHomeGuard {
+            original: Option<OsString>,
+        }
+
+        impl ConfigHomeGuard {
+            fn set(path: &Path) -> Self {
+                let original = env::var_os("XDG_CONFIG_HOME");
+                env::set_var("XDG_CONFIG_HOME", path);
+                Self { original }
+            }
+        }
+
+        impl Drop for ConfigHomeGuard {
+            fn drop(&mut self) {
+                if let Some(original) = self.original.take() {
+                    env::set_var("XDG_CONFIG_HOME", original);
+                } else {
+                    env::remove_var("XDG_CONFIG_HOME");
+                }
+            }
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().join("config");
+        fs::create_dir_all(&config_dir).unwrap();
+        let _guard = ConfigHomeGuard::set(&config_dir);
+
+        let handlr_dir = config_dir.join("handlr");
+        fs::create_dir_all(&handlr_dir).unwrap();
+        let handlr_path = handlr_dir.join("handlr.toml");
+        let handlr_contents = r#"
+enable_selector = true
+selector = "wofi -dmenu"
+term_exec_args = "-x"
+expand_wildcards = true
+
+[[handlers]]
+exec = "dummy %f"
+regexes = ["foo"]
+"#;
+        fs::write(&handlr_path, handlr_contents).unwrap();
+
+        let config = Config::load(None).unwrap();
+        assert!(config.selector.enable_selector);
+        assert_eq!(config.selector.selector, "wofi -dmenu");
+        assert_eq!(config.selector.term_exec_args.as_deref(), Some("-x"));
+        assert!(config.selector.expand_wildcards);
+        assert!(config.get_fuzzy_finder("fzf").is_some());
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+struct HandlrCompatConfig {
+    enable_selector: bool,
+    selector: String,
+    term_exec_args: Option<String>,
+    expand_wildcards: bool,
+    #[serde(flatten)]
+    _extra: HashMap<String, Value>,
+}
+
+impl Default for HandlrCompatConfig {
+    fn default() -> Self {
+        let selector = SelectorConfig::default();
+        Self {
+            enable_selector: selector.enable_selector,
+            selector: selector.selector,
+            term_exec_args: selector.term_exec_args,
+            expand_wildcards: selector.expand_wildcards,
+            _extra: HashMap::new(),
+        }
+    }
+}
+
+impl HandlrCompatConfig {
+    fn into_selector_config(self) -> SelectorConfig {
+        SelectorConfig {
+            enable_selector: self.enable_selector,
+            selector: self.selector,
+            term_exec_args: self.term_exec_args,
+            expand_wildcards: self.expand_wildcards,
+        }
     }
 }

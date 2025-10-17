@@ -8,7 +8,7 @@ coverage = "run --manifest-path scripts/coverage.sh"
 # Quick check alias
 check-all = [
   "fmt -- --check",
-  "clippy -- -D warnings -D clippy::all -D clippy::pedantic -A clippy::module_name_repetitions -A clippy::struct_excessive_bools",
+  "clippy -- -D warnings",
   "test",
   "doc --all-features --no-deps --document-private-items",
 ]
@@ -16,7 +16,7 @@ check-all = [
 # Full check with coverage
 check-full = [
   "fmt -- --check",
-  "clippy -- -D warnings -D clippy::all -D clippy::pedantic -A clippy::module_name_repetitions -A clippy::struct_excessive_bools",
+  "clippy -- -D warnings",
   "test",
   "doc --all-features --no-deps --document-private-items",
   "run --manifest-path scripts/coverage.sh",

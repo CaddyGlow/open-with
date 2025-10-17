@@ -4,7 +4,7 @@ use log::{debug, info};
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use url::Url;
 use walkdir::WalkDir;
 
@@ -16,6 +16,7 @@ mod desktop_parser;
 mod executor;
 mod fuzzy_finder;
 mod mime_associations;
+mod mimeapps;
 mod target;
 mod template;
 mod xdg;
@@ -27,11 +28,13 @@ pub mod built_info {
 
 use application_finder::{ApplicationEntry, ApplicationFinder};
 use cache::{DesktopCache, FileSystemCache};
-use cli::{Args, FuzzyFinder};
+use cli::{Cli, Command, FuzzyFinder, OpenArgs};
 use desktop_parser::DesktopFile;
 use executor::ApplicationExecutor;
 use fuzzy_finder::FuzzyFinderRunner;
+use itertools::Itertools;
 use mime_associations::MimeAssociations;
+use mimeapps::MimeApps;
 use target::LaunchTarget;
 
 #[derive(Debug)]
@@ -40,11 +43,11 @@ struct OpenWith {
     fuzzy_finder_runner: FuzzyFinderRunner,
     executor: ApplicationExecutor,
     config: config::Config,
-    args: Args,
+    args: OpenArgs,
 }
 
 impl OpenWith {
-    fn new(args: Args) -> Result<Self> {
+    fn new(args: OpenArgs) -> Result<Self> {
         if args.clear_cache {
             Self::clear_cache()?;
         }
@@ -307,17 +310,138 @@ impl OpenWith {
     }
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
+fn handle_command(command: Command) -> Result<()> {
+    match command {
+        Command::Set(args) => {
+            let mime = normalize_mime_input(&args.mime)?;
+            ensure_handler_exists(&args.handler)?;
+            let mut apps = MimeApps::load_from_disk(None)?;
+            apps.set_handler(&mime, vec![args.handler.clone()], args.expand_wildcards);
+            apps.save_to_disk(None)?;
+            println!("Set default handler for {mime} -> {}", args.handler);
+            Ok(())
+        }
+        Command::Add(args) => {
+            let mime = normalize_mime_input(&args.mime)?;
+            ensure_handler_exists(&args.handler)?;
+            let mut apps = MimeApps::load_from_disk(None)?;
+            apps.add_handler(&mime, args.handler.clone(), args.expand_wildcards);
+            apps.save_to_disk(None)?;
+            println!("Added handler {} for {}", args.handler, mime);
+            Ok(())
+        }
+        Command::Remove(args) => {
+            let mime = normalize_mime_input(&args.mime)?;
+            let mut apps = MimeApps::load_from_disk(None)?;
+            apps.remove_handler(&mime, Some(args.handler.as_str()), args.expand_wildcards);
+            apps.save_to_disk(None)?;
+            println!("Removed handler {} from {}", args.handler, mime);
+            Ok(())
+        }
+        Command::Unset(args) => {
+            let mime = normalize_mime_input(&args.mime)?;
+            let mut apps = MimeApps::load_from_disk(None)?;
+            apps.remove_handler(&mime, None, args.expand_wildcards);
+            apps.save_to_disk(None)?;
+            println!("Unset handlers for {}", mime);
+            Ok(())
+        }
+        Command::List(args) => {
+            let apps = MimeApps::load_from_disk(None)?;
+            if args.json {
+                let payload = serde_json::json!({
+                    "default_apps": apps
+                        .default_apps()
+                        .iter()
+                        .map(|(mime, handlers)| {
+                            serde_json::json!({
+                                "mime": mime,
+                                "handlers": handlers.iter().cloned().collect::<Vec<_>>(),
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                    "added_associations": apps
+                        .added_associations()
+                        .iter()
+                        .map(|(mime, handlers)| {
+                            serde_json::json!({
+                                "mime": mime,
+                                "handlers": handlers.iter().cloned().collect::<Vec<_>>(),
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                });
 
-    if args.build_info {
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else {
+                for (mime, handlers) in apps.default_apps() {
+                    let joined = handlers.iter().map(|h| h.as_str()).join("; ");
+                    println!("{mime}: {joined}");
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn normalize_mime_input(input: &str) -> Result<String> {
+    if input.contains('/') || input.contains('*') {
+        return Ok(input.to_string());
+    }
+
+    let normalized = input.trim_start_matches('.');
+    mime_guess::from_ext(normalized)
+        .first()
+        .map(|mime| mime.essence_str().to_string())
+        .ok_or_else(|| anyhow::anyhow!("Unable to resolve MIME type for extension: {}", input))
+}
+
+fn ensure_handler_exists(handler: &str) -> Result<()> {
+    if should_skip_handler_validation() {
+        return Ok(());
+    }
+
+    if handler.trim().is_empty() {
+        anyhow::bail!("Handler identifier cannot be empty");
+    }
+
+    let path = Path::new(handler);
+    if (path.is_absolute() || handler.contains('/')) && path.exists() {
+        return Ok(());
+    }
+
+    let cache = OpenWith::load_desktop_cache();
+    let finder = ApplicationFinder::new(cache, MimeAssociations::default());
+
+    if finder.find_desktop_file(handler).is_none() {
+        anyhow::bail!(
+            "Desktop handler `{}` not found in available applications",
+            handler
+        );
+    }
+
+    Ok(())
+}
+
+fn should_skip_handler_validation() -> bool {
+    cfg!(test) && std::env::var("OPEN_WITH_SKIP_HANDLER_VALIDATION").is_ok()
+}
+
+fn main() -> Result<()> {
+    let Cli { open, command } = Cli::parse();
+
+    if let Some(command) = command {
+        return handle_command(command);
+    }
+
+    if open.build_info {
         cli::show_build_info();
         return Ok(());
     }
 
-    if args.generate_config {
+    if open.generate_config {
         let config = config::Config::default();
-        if let Some(custom_path) = &args.config {
+        if let Some(custom_path) = &open.config {
             // Save to custom path
             if let Some(parent) = custom_path.parent() {
                 fs::create_dir_all(parent)?;
@@ -339,32 +463,33 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if args.verbose {
+    if open.verbose {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     } else {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     }
 
-    let app = OpenWith::new(args)?;
+    let app = OpenWith::new(open)?;
     app.run()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::{EditArgs, RemoveArgs, UnsetArgs};
     use serial_test::serial;
     use std::collections::HashMap;
     use std::env;
     use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
+    use std::process::{Command as ProcessCommand, Stdio};
     use tempfile::TempDir;
     use url::Url;
 
     /// Helper function to create test args with JSON output to avoid fuzzy finder
-    fn create_test_args_json(target: Option<PathBuf>) -> Args {
-        Args {
+    fn create_test_args_json(target: Option<PathBuf>) -> OpenArgs {
+        OpenArgs {
             target: target.map(|p| p.to_string_lossy().to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: true, // Always use JSON in tests to avoid fuzzy finder
@@ -400,9 +525,58 @@ mod tests {
 
     impl Drop for CacheEnvGuard {
         fn drop(&mut self) {
-            match &self.original {
-                Some(value) => env::set_var(Self::KEY, value),
-                None => env::remove_var(Self::KEY),
+            if let Some(original) = self.original.take() {
+                env::set_var(Self::KEY, original);
+            } else {
+                env::remove_var(Self::KEY);
+            }
+        }
+    }
+
+    struct ConfigEnvGuard {
+        original: Option<OsString>,
+    }
+
+    impl ConfigEnvGuard {
+        const KEY: &'static str = "XDG_CONFIG_HOME";
+
+        fn set(path: &Path) -> Self {
+            let original = env::var_os(Self::KEY);
+            env::set_var(Self::KEY, path);
+            Self { original }
+        }
+    }
+
+    impl Drop for ConfigEnvGuard {
+        fn drop(&mut self) {
+            if let Some(original) = self.original.take() {
+                env::set_var(Self::KEY, original);
+            } else {
+                env::remove_var(Self::KEY);
+            }
+        }
+    }
+
+    struct ValidationEnvGuard {
+        original: Option<OsString>,
+    }
+
+    impl ValidationEnvGuard {
+        const KEY: &'static str = "OPEN_WITH_SKIP_HANDLER_VALIDATION";
+
+        fn enable() -> Self {
+            let original = env::var_os(Self::KEY);
+            env::set_var(Self::KEY, "1");
+            Self { original }
+        }
+    }
+
+    impl Drop for ValidationEnvGuard {
+        fn drop(&mut self) {
+            if let Some(original) = self.original.take() {
+                env::set_var(Self::KEY, original);
+            } else {
+                env::remove_var(Self::KEY);
             }
         }
     }
@@ -465,6 +639,98 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn test_handle_command_set_add_unset() {
+        let temp_config = TempDir::new().unwrap();
+        let _guard = ConfigEnvGuard::set(temp_config.path());
+
+        let _validation = ValidationEnvGuard::enable();
+
+        handle_command(Command::Set(EditArgs {
+            mime: "text/plain".into(),
+            handler: "helix.desktop".into(),
+            expand_wildcards: false,
+        }))
+        .unwrap();
+
+        let config_path = temp_config.path().join("mimeapps.list");
+        let contents = fs::read_to_string(&config_path).unwrap();
+        assert!(contents.contains("text/plain=helix.desktop;"));
+
+        handle_command(Command::Add(EditArgs {
+            mime: "text/plain".into(),
+            handler: "code.desktop".into(),
+            expand_wildcards: false,
+        }))
+        .unwrap();
+
+        let contents = fs::read_to_string(&config_path).unwrap();
+        assert!(contents.contains("text/plain=helix.desktop;code.desktop;"));
+
+        handle_command(Command::Unset(UnsetArgs {
+            mime: "text/plain".into(),
+            expand_wildcards: false,
+        }))
+        .unwrap();
+
+        let contents = fs::read_to_string(&config_path).unwrap();
+        assert!(contents.trim().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_handle_command_remove_handler() {
+        let temp_config = TempDir::new().unwrap();
+        let _guard = ConfigEnvGuard::set(temp_config.path());
+
+        let _validation = ValidationEnvGuard::enable();
+
+        handle_command(Command::Set(EditArgs {
+            mime: "text/plain".into(),
+            handler: "helix.desktop".into(),
+            expand_wildcards: false,
+        }))
+        .unwrap();
+
+        handle_command(Command::Add(EditArgs {
+            mime: "text/plain".into(),
+            handler: "code.desktop".into(),
+            expand_wildcards: false,
+        }))
+        .unwrap();
+
+        handle_command(Command::Remove(RemoveArgs {
+            mime: "text/plain".into(),
+            handler: "helix.desktop".into(),
+            expand_wildcards: false,
+        }))
+        .unwrap();
+
+        let contents = fs::read_to_string(temp_config.path().join("mimeapps.list")).unwrap();
+        assert!(contents.contains("text/plain=code.desktop;"));
+        assert!(!contents.contains("helix.desktop"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_handle_command_add_missing_handler_errors() {
+        env::remove_var(ValidationEnvGuard::KEY);
+
+        let temp_config = TempDir::new().unwrap();
+        let _guard = ConfigEnvGuard::set(temp_config.path());
+
+        let result = handle_command(Command::Add(EditArgs {
+            mime: "text/plain".into(),
+            handler: "nonexistent.desktop".into(),
+            expand_wildcards: false,
+        }));
+
+        assert!(result.is_err());
+        let message = format!("{}", result.unwrap_err());
+        assert!(message.contains("Desktop handler"));
+    }
+
+    #[test]
     fn test_find_desktop_file_exact_match() {
         let temp_dir = TempDir::new().unwrap();
         let desktop_content = r"[Desktop Entry]
@@ -477,7 +743,7 @@ Exec=test";
         let desktop_file = DesktopFile::parse(&file_path).unwrap();
         cache.insert(file_path.clone(), desktop_file);
 
-        let mime_associations = MimeAssociations::new();
+        let mime_associations = MimeAssociations::default();
         let application_finder = ApplicationFinder::new(cache, mime_associations);
 
         let result = application_finder.find_desktop_file("test.desktop");
@@ -502,7 +768,7 @@ Exec=test";
 
         // Test that OpenWith::new succeeds when clear_cache is true
         // This should work even in environments with no desktop files
-        let args = Args {
+        let args = OpenArgs {
             target: Some("test.txt".to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: false,
@@ -622,7 +888,7 @@ Exec=test";
 
     #[test]
     fn test_run_with_no_file() {
-        let args = Args {
+        let args = OpenArgs {
             target: None,
             fuzzer: FuzzyFinder::Auto,
             json: false,
@@ -643,7 +909,7 @@ Exec=test";
 
     #[test]
     fn test_run_with_nonexistent_file() {
-        let args = Args {
+        let args = OpenArgs {
             target: Some("/nonexistent/file.txt".to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: false,
@@ -672,7 +938,7 @@ Exec=test";
         let cache_file = temp_dir.path().join("desktop_cache.json");
         let _cache_env = CacheEnvGuard::set(&cache_file);
 
-        let args = Args {
+        let args = OpenArgs {
             target: None,
             fuzzer: FuzzyFinder::Auto,
             json: false,
@@ -714,7 +980,7 @@ Exec=testapp --print %F";
         let desktop_file = DesktopFile::parse(&file_path).unwrap();
         cache.insert(file_path.clone(), desktop_file);
 
-        let mime_associations = MimeAssociations::new();
+        let mime_associations = MimeAssociations::default();
         let application_finder = ApplicationFinder::new(cache, mime_associations);
 
         let apps = application_finder.find_for_mime("text/plain", true);
@@ -793,7 +1059,7 @@ Exec=test";
         let desktop_file = DesktopFile::parse(&file_path).unwrap();
         cache.insert(file_path.clone(), desktop_file);
 
-        let mime_associations = MimeAssociations::new();
+        let mime_associations = MimeAssociations::default();
         let application_finder = ApplicationFinder::new(cache, mime_associations);
 
         // Should find by suffix match
@@ -847,7 +1113,7 @@ Exec=test";
     fn test_run_with_directory_instead_of_file() {
         let temp_dir = TempDir::new().unwrap();
 
-        let args = Args {
+        let args = OpenArgs {
             target: Some(temp_dir.path().to_string_lossy().to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: false,
@@ -875,7 +1141,7 @@ Exec=test";
         let temp_file = temp_dir.path().join("test.xyz");
         fs::write(&temp_file, "test content").unwrap();
 
-        let args = Args {
+        let args = OpenArgs {
             target: Some(temp_file.to_string_lossy().to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: false,
@@ -945,7 +1211,7 @@ Exec=test";
     #[test]
     fn test_run_fuzzy_finder_auto_detection() {
         // Test fuzzy finder auto-detection logic without actually running it
-        let _args = Args {
+        let _args = OpenArgs {
             target: Some("test.txt".to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: true, // Use JSON to avoid running fuzzy finder
@@ -1111,7 +1377,7 @@ MimeType=text/plain;";
         let test_file = temp_dir.path().join("test.reallyunknowntype");
         fs::write(&test_file, "test content").unwrap();
 
-        let args = Args {
+        let args = OpenArgs {
             target: Some(test_file.to_string_lossy().to_string()),
             fuzzer: FuzzyFinder::Auto,
             json: true, // Use JSON to avoid fuzzy finder
@@ -1161,7 +1427,7 @@ MimeType=text/plain;";
         }];
 
         // Test fzf command construction - just build the command, don't run it
-        let mut fzf_cmd = Command::new("fzf");
+        let mut fzf_cmd = ProcessCommand::new("fzf");
         fzf_cmd
             .arg("--prompt")
             .arg("Open 'test.txt' with: ")
@@ -1177,7 +1443,7 @@ MimeType=text/plain;";
         assert_eq!(fzf_program, "fzf");
 
         // Test fuzzel command construction - just build the command, don't run it
-        let mut fuzzel_cmd = Command::new("fuzzel");
+        let mut fuzzel_cmd = ProcessCommand::new("fuzzel");
         fuzzel_cmd
             .arg("--dmenu")
             .arg("--prompt")

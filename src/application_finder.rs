@@ -63,7 +63,7 @@ impl ApplicationEntry {
         self
     }
 
-    pub fn as_available(mut self) -> Self {
+    pub fn into_available(mut self) -> Self {
         self.is_xdg = false;
         self.xdg_priority = -1;
         self.is_default = false;
@@ -141,7 +141,7 @@ impl ApplicationFinder {
 
                     if seen.insert(desktop_id) {
                         let app = ApplicationEntry::from_desktop_entry(entry, path.clone())
-                            .as_available();
+                            .into_available();
                         applications.push(app);
 
                         if include_actions {
@@ -152,7 +152,7 @@ impl ApplicationFinder {
                                     action,
                                     path.clone(),
                                 )
-                                .as_available();
+                                .into_available();
                                 applications.push(action_app);
                             }
                         }
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn test_new_application_finder() {
         let cache = Box::new(crate::cache::MemoryCache::new());
-        let associations = MimeAssociations::new();
+        let associations = MimeAssociations::default();
         let finder = ApplicationFinder::new(cache, associations);
 
         assert!(finder.desktop_cache.is_empty());
@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn test_find_for_mime_empty_cache() {
         let cache = Box::new(crate::cache::MemoryCache::new());
-        let associations = MimeAssociations::new();
+        let associations = MimeAssociations::default();
         let finder = ApplicationFinder::new(cache, associations);
 
         let apps = finder.find_for_mime("text/plain", false);
@@ -254,7 +254,7 @@ mod tests {
         let path = PathBuf::from("/usr/share/applications/texteditor.desktop");
         cache.insert(path.clone(), desktop_file);
 
-        let associations = MimeAssociations::new();
+        let associations = MimeAssociations::default();
         let finder = ApplicationFinder::new(cache, associations);
 
         let apps = finder.find_for_mime("text/plain", false);
@@ -315,7 +315,7 @@ mod tests {
         let path = PathBuf::from("/usr/share/applications/imageviewer.desktop");
         cache.insert(path.clone(), desktop_file);
 
-        let associations = MimeAssociations::new();
+        let associations = MimeAssociations::default();
         let finder = ApplicationFinder::new(cache, associations);
 
         let apps = finder.find_for_mime("image/png", true);
@@ -354,7 +354,7 @@ mod tests {
         let path = PathBuf::from("/usr/share/applications/imageviewer.desktop");
         cache.insert(path.clone(), desktop_file);
 
-        let associations = MimeAssociations::new();
+        let associations = MimeAssociations::default();
         let finder = ApplicationFinder::new(cache, associations);
 
         let apps = finder.find_for_mime("image/png", false);
@@ -372,7 +372,7 @@ mod tests {
         let path = PathBuf::from("/usr/share/applications/testapp.desktop");
         cache.insert(path.clone(), desktop_file);
 
-        let associations = MimeAssociations::new();
+        let associations = MimeAssociations::default();
         let finder = ApplicationFinder::new(cache, associations);
 
         let result = finder.find_desktop_file("testapp.desktop");
@@ -390,7 +390,7 @@ mod tests {
         let path = PathBuf::from("/usr/share/applications/org.example.testapp.desktop");
         cache.insert(path.clone(), desktop_file);
 
-        let associations = MimeAssociations::new();
+        let associations = MimeAssociations::default();
         let finder = ApplicationFinder::new(cache, associations);
 
         let result = finder.find_desktop_file("applications/org.example.testapp.desktop");
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn test_find_desktop_file_not_found() {
         let cache = Box::new(crate::cache::MemoryCache::new());
-        let associations = MimeAssociations::new();
+        let associations = MimeAssociations::default();
         let finder = ApplicationFinder::new(cache, associations);
 
         let result = finder.find_desktop_file("nonexistent.desktop");
@@ -484,7 +484,7 @@ mod tests {
         let path = PathBuf::from("/usr/share/applications/texteditor.desktop");
         cache.insert(path.clone(), desktop_file);
 
-        let associations = MimeAssociations::new();
+        let associations = MimeAssociations::default();
         let finder = ApplicationFinder::new(cache, associations);
 
         let apps = finder.find_for_mime("image/png", false);
@@ -553,13 +553,13 @@ mod tests {
     }
 
     #[test]
-    fn test_application_entry_as_available_resets_flags() {
+    fn test_application_entry_into_available_resets_flags() {
         let entry = create_test_desktop_entry("ResetApp", vec!["text/plain"]);
         let path = PathBuf::from("/usr/share/applications/resetapp.desktop");
 
         let app = ApplicationEntry::from_desktop_entry(&entry, path)
             .with_xdg(3, true)
-            .as_available();
+            .into_available();
 
         assert!(!app.is_xdg);
         assert!(!app.is_default);

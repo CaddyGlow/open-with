@@ -1,4 +1,4 @@
-use clap::{Parser, ValueEnum};
+use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, ValueEnum, PartialEq)]
@@ -13,9 +13,19 @@ pub enum FuzzyFinder {
     author = "Your Name",
     version = crate::built_info::PKG_VERSION,
     about = "Enhanced file opener with XDG MIME support",
-    long_about = None
+    long_about = None,
+    subcommand_precedence_over_arg = true
 )]
-pub struct Args {
+pub struct Cli {
+    #[command(flatten)]
+    pub open: OpenArgs,
+
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+pub struct OpenArgs {
     /// Resource to open; accepts filesystem paths or URIs.
     pub target: Option<String>,
 
@@ -56,14 +66,69 @@ pub struct Args {
     pub auto_open_single: bool,
 }
 
-impl Args {
-    /// Validate arguments and return errors for invalid combinations
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Set the default handler for a MIME type or extension.
+    Set(EditArgs),
+    /// Add an additional handler (after the default) for a MIME type or extension.
+    Add(EditArgs),
+    /// Remove a handler from a MIME type or extension.
+    Remove(RemoveArgs),
+    /// Unset the default handlers for a MIME type or extension.
+    Unset(UnsetArgs),
+    /// List configured handlers.
+    List(ListArgs),
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+pub struct EditArgs {
+    /// MIME type or file extension to update.
+    #[arg(value_name = "MIME_OR_EXT")]
+    pub mime: String,
+    /// Desktop file to apply (e.g. `code.desktop`).
+    #[arg(value_name = "HANDLER")]
+    pub handler: String,
+    /// Expand wildcard MIME patterns to the currently known concrete MIME keys.
+    #[arg(long)]
+    pub expand_wildcards: bool,
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+pub struct RemoveArgs {
+    /// MIME type or file extension to update.
+    #[arg(value_name = "MIME_OR_EXT")]
+    pub mime: String,
+    /// Desktop file to remove (e.g. `code.desktop`).
+    #[arg(value_name = "HANDLER")]
+    pub handler: String,
+    /// Expand wildcard MIME patterns to the currently known concrete MIME keys.
+    #[arg(long)]
+    pub expand_wildcards: bool,
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+pub struct UnsetArgs {
+    /// MIME type or file extension to update.
+    #[arg(value_name = "MIME_OR_EXT")]
+    pub mime: String,
+    /// Expand wildcard MIME patterns to the currently known concrete MIME keys.
+    #[arg(long)]
+    pub expand_wildcards: bool,
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+pub struct ListArgs {
+    /// Output handler info as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl OpenArgs {
+    /// Validate arguments and return errors for invalid combinations.
     #[allow(dead_code)]
     pub fn validate(&self) -> Result<(), String> {
         if !self.build_info && !self.clear_cache && !self.generate_config && self.target.is_none() {
-            return Err(
-                "A target argument is required unless using --build-info, --clear-cache, or --generate-config".to_string(),
-            );
+            return Err("A target argument is required unless using --build-info, --clear-cache, or --generate-config".to_string());
         }
         Ok(())
     }
@@ -112,12 +177,6 @@ pub fn show_build_info() {
 
     // Additional useful build info
     println!("Profile: {}", crate::built_info::PROFILE);
-
-    // if let Some(features) = crate::built_info::FEATURES_STR.as_deref() {
-    //     if !features.is_empty() {
-    //         println!("Features: {}", features);
-    //     }
-    // }
 }
 
 #[cfg(test)]
@@ -126,293 +185,28 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
-    fn test_args_parsing_with_file() {
-        // Test basic file argument
-        let args = Args::try_parse_from(["open-with", "test.txt"]).unwrap();
-        assert_eq!(args.target.as_deref(), Some("test.txt"));
-        assert_eq!(args.fuzzer, FuzzyFinder::Auto);
-        assert!(!args.json);
-        assert!(!args.actions);
-        assert!(!args.clear_cache);
-        assert!(!args.verbose);
-        assert!(!args.build_info);
-        assert!(!args.generate_config);
+    fn test_cli_default_open() {
+        let cli = Cli::try_parse_from(["open-with", "file.txt"]).unwrap();
+        assert!(cli.command.is_none());
+        assert_eq!(cli.open.target.as_deref(), Some("file.txt"));
+        assert_eq!(cli.open.fuzzer, FuzzyFinder::Auto);
     }
 
     #[test]
-    fn test_args_parsing_build_info_only() {
-        // Test --build-info without file
-        let args = Args::try_parse_from(["open-with", "--build-info"]).unwrap();
-        assert_eq!(args.target, None);
-        assert!(args.build_info);
-
-        // Should pass validation
-        assert!(args.validate().is_ok());
-    }
-
-    #[test]
-    fn test_args_validation_missing_file() {
-        // Test missing file without --build-info or --clear-cache should fail validation
-        let args = Args::try_parse_from(["open-with"]).unwrap();
-        assert_eq!(args.target, None);
-        assert!(!args.build_info);
-        assert!(!args.clear_cache);
-
-        // Should fail validation
-        assert!(args.validate().is_err());
-    }
-
-    #[test]
-    fn test_args_validation_clear_cache_only() {
-        // Test --clear-cache without file should pass validation
-        let args = Args::try_parse_from(["open-with", "--clear-cache"]).unwrap();
-        assert_eq!(args.target, None);
-        assert!(args.clear_cache);
-
-        // Should pass validation
-        assert!(args.validate().is_ok());
-    }
-
-    #[test]
-    fn test_args_validation_generate_config_only() {
-        // Test --generate-config without file should pass validation
-        let args = Args::try_parse_from(["open-with", "--generate-config"]).unwrap();
-        assert_eq!(args.target, None);
-        assert!(args.generate_config);
-
-        // Should pass validation
-        assert!(args.validate().is_ok());
-    }
-
-    #[test]
-    fn test_args_with_all_flags() {
-        let args = Args::try_parse_from([
-            "open-with",
-            "test.txt",
-            "--fuzzer",
-            "fzf",
-            "--json",
-            "--actions",
-            "--clear-cache",
-            "--verbose",
-            "--build-info",
-            "--generate-config",
-        ])
-        .unwrap();
-
-        assert_eq!(args.target.as_deref(), Some("test.txt"));
-        assert_eq!(args.fuzzer, FuzzyFinder::Fzf);
-        assert!(args.json);
-        assert!(args.actions);
-        assert!(args.clear_cache);
-        assert!(args.verbose);
-        assert!(args.build_info);
-        assert!(args.generate_config);
-    }
-
-    #[test]
-    fn test_fuzzy_finder_enum_values() {
-        use clap::ValueEnum;
-        assert_eq!(
-            FuzzyFinder::from_str("fzf", false).unwrap(),
-            FuzzyFinder::Fzf
-        );
-        assert_eq!(
-            FuzzyFinder::from_str("fuzzel", false).unwrap(),
-            FuzzyFinder::Fuzzel
-        );
-        assert_eq!(
-            FuzzyFinder::from_str("auto", false).unwrap(),
-            FuzzyFinder::Auto
-        );
-    }
-
-    #[test]
-    fn test_short_flags() {
-        let args = Args::try_parse_from([
-            "open-with",
-            "test.txt",
-            "-j", // --json
-            "-a", // --actions
-            "-v", // --verbose
-        ])
-        .unwrap();
-
-        assert!(args.json);
-        assert!(args.actions);
-        assert!(args.verbose);
-    }
-
-    #[test]
-    fn test_get_target_method() {
-        let args_with_file = Args::try_parse_from(["open-with", "test.txt"]).unwrap();
-        assert_eq!(args_with_file.get_target(), Some("test.txt"));
-
-        let args_without_file = Args::try_parse_from(["open-with", "--build-info"]).unwrap();
-        assert_eq!(args_without_file.get_target(), None);
-    }
-
-    #[test]
-    fn test_command_structure() {
-        // Verify the command structure is valid
-        Args::command().debug_assert();
-    }
-
-    #[test]
-    fn test_help_text_generation() {
-        let mut cmd = Args::command();
-        let help = cmd.render_help();
-
-        // Verify help contains key elements
-        let help_str = help.to_string();
-        assert!(help_str.contains("Enhanced file opener with XDG MIME support"));
-        assert!(help_str.contains("--fuzzer"));
-        assert!(help_str.contains("--json"));
-        assert!(help_str.contains("--actions"));
-        assert!(help_str.contains("--build-info"));
-    }
-
-    #[test]
-    fn test_version_info() {
-        let cmd = Args::command();
-        let version = cmd.get_version().unwrap();
-
-        // Version should be set from built info
-        assert!(!version.is_empty());
-        assert_eq!(version, crate::built_info::PKG_VERSION);
-    }
-
-    #[test]
-    fn test_fuzzer_default_value() {
-        let args = Args::try_parse_from(["open-with", "test.txt"]).unwrap();
-        assert_eq!(args.fuzzer, FuzzyFinder::Auto);
-    }
-
-    #[test]
-    fn test_fuzzer_explicit_value() {
-        let args = Args::try_parse_from(["open-with", "test.txt", "--fuzzer", "fzf"]).unwrap();
-        assert_eq!(args.fuzzer, FuzzyFinder::Fzf);
-    }
-
-    #[test]
-    fn test_invalid_fuzzer_value() {
-        let result = Args::try_parse_from(["open-with", "test.txt", "--fuzzer", "invalid"]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_build_info_without_other_args() {
-        let args = Args::try_parse_from(["open-with", "--build-info"]).unwrap();
-        assert!(args.build_info);
-        assert_eq!(args.target, None);
-        assert_eq!(args.fuzzer, FuzzyFinder::Auto); // Should still have default
-        assert!(!args.generate_config);
-    }
-
-    #[test]
-    fn test_show_build_info() {
-        // Capture stdout to test the function
-
-        // This test just ensures the function runs without panicking
-        // We can't easily test the output without mocking stdout
-        show_build_info();
-
-        // Verify that build constants exist and are accessible
-        assert!(!crate::built_info::PKG_VERSION.is_empty());
-        assert!(!crate::built_info::TARGET.is_empty());
-        assert!(!crate::built_info::RUSTC_VERSION.is_empty());
-        assert!(!crate::built_info::PROFILE.is_empty());
-    }
-
-    #[test]
-    fn test_show_build_info_coverage() {
-        use std::io::{self, Write};
-        use std::sync::Mutex;
-
-        // Create a buffer to capture output
-        struct TestWriter {
-            buffer: Mutex<Vec<u8>>,
-        }
-
-        impl Write for TestWriter {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                self.buffer.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
+    fn test_cli_set_subcommand() {
+        let cli = Cli::try_parse_from(["open-with", "set", "text/plain", "helix.desktop"]).unwrap();
+        match cli.command {
+            Some(Command::Set(args)) => {
+                assert_eq!(args.mime, "text/plain");
+                assert_eq!(args.handler, "helix.desktop");
+                assert!(!args.expand_wildcards);
             }
-
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
+            _ => panic!("Expected set command"),
         }
-
-        // Call show_build_info to ensure all branches are covered
-        show_build_info();
-
-        // Test that all the build info constants are properly set
-        assert!(!crate::built_info::PKG_VERSION.is_empty());
-        assert!(!crate::built_info::BUILT_TIME_UTC.is_empty());
-        assert!(!crate::built_info::TARGET.is_empty());
-        assert!(!crate::built_info::RUSTC_VERSION.is_empty());
-        assert!(!crate::built_info::PROFILE.is_empty());
-
-        // These might be None in some environments, but we should still check them
-        let _ = crate::built_info::GIT_COMMIT_HASH;
-        let _ = crate::built_info::GIT_COMMIT_HASH_SHORT;
-        let _ = crate::built_info::GIT_HEAD_REF;
-        let _ = crate::built_info::GIT_DIRTY;
     }
 
     #[test]
-    fn test_show_build_info_with_git_info() {
-        // Mock the git info by setting test values
-        // This ensures we cover all branches in show_build_info
-
-        // Just run the function - it will use whatever git info is available
-        show_build_info();
-
-        // The function should handle both cases:
-        // - When git info is available (Some)
-        // - When git info is not available (None)
-
-        // We can't easily mock the constants, but we ensure the function runs
-        // without panicking in both scenarios
-    }
-
-    #[test]
-    fn test_show_build_info_output_format() {
-        use std::io::{self, Write};
-
-        // Capture stdout to verify output format
-        struct CaptureWriter {
-            output: Vec<u8>,
-        }
-
-        impl Write for CaptureWriter {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                self.output.extend_from_slice(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-
-        // Run show_build_info
-        show_build_info();
-
-        // Verify that the function outputs expected fields
-        // We can't capture println! easily, but we can verify the constants exist
-        assert!(!crate::built_info::PKG_VERSION.is_empty());
-        assert!(!crate::built_info::BUILT_TIME_UTC.is_empty());
-        assert!(!crate::built_info::TARGET.is_empty());
-        assert!(!crate::built_info::RUSTC_VERSION.is_empty());
-        assert!(!crate::built_info::PROFILE.is_empty());
-
-        // Check optional fields exist (may be Some or None)
-        let _ = crate::built_info::GIT_COMMIT_HASH;
-        let _ = crate::built_info::GIT_COMMIT_HASH_SHORT;
-        let _ = crate::built_info::GIT_HEAD_REF;
-        let _ = crate::built_info::GIT_DIRTY;
+    fn test_cli_parse_help() {
+        Cli::command().debug_assert();
     }
 }

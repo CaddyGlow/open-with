@@ -67,6 +67,8 @@ Options:
   -v, --verbose              Verbose output
       --build-info           Show build information
       --generate-config      Generate default configuration file
+      --config <CONFIG>      Path to configuration file
+      --auto-open-single     Automatically open when only one application is available
   -h, --help                 Print help
   -V, --version              Print version
 ```
@@ -115,6 +117,30 @@ Shows both the main application entries and their available actions (edit, print
 open-with --generate-config
 ```
 Creates a default configuration file at `~/.config/open-with/config.toml` with customizable fuzzy finder settings.
+
+### Manage MIME Associations
+
+`open-with` now exposes subcommands to edit the user `mimeapps.list` directly:
+
+```bash
+# Set (overwrite) the default handler for a MIME type or extension
+open-with set text/plain helix.desktop
+
+# Add a secondary handler without replacing the default entry
+open-with add text/plain code.desktop
+
+# Remove a specific handler
+open-with remove text/plain code.desktop
+
+# Remove all handlers for a MIME type
+open-with unset text/plain
+
+# Inspect configured handlers
+open-with list
+open-with list --json | jq
+```
+
+File extensions are automatically converted to their corresponding MIME types (e.g., `open-with set .md helix.desktop`).
 
 ## Dependencies
 
