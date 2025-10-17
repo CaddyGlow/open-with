@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use url::Url;
+use walkdir::WalkDir;
 
 mod application_finder;
 mod cache;
@@ -111,23 +112,40 @@ impl OpenWith {
             let desktop_dirs = xdg::get_desktop_file_paths();
 
             for dir in &desktop_dirs {
-                // Skip directories that don't exist or can't be read
-                if let Ok(entries) = fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
-                            match DesktopFile::parse(&path) {
-                                Ok(desktop_file) => {
-                                    cache.insert(path, desktop_file);
-                                }
-                                Err(e) => {
-                                    debug!("Failed to parse {}: {}", path.display(), e);
-                                }
+                // Skip directories that don't exist
+                if !dir.exists() {
+                    debug!("Directory does not exist: {}", dir.display());
+                    continue;
+                }
+
+                // Recursively walk through the directory and subdirectories
+                for entry in WalkDir::new(dir)
+                    .follow_links(false)
+                    .into_iter()
+                    .filter_entry(|e| {
+                        // Skip hidden directories (those starting with '.')
+                        e.file_name()
+                            .to_str()
+                            .map(|s| !s.starts_with('.'))
+                            .unwrap_or(false)
+                    })
+                    .filter_map(|e| e.ok())
+                {
+                    let path = entry.path();
+
+                    // Only process files with .desktop extension
+                    if path.is_file()
+                        && path.extension().and_then(|s| s.to_str()) == Some("desktop")
+                    {
+                        match DesktopFile::parse(path) {
+                            Ok(desktop_file) => {
+                                cache.insert(path.to_path_buf(), desktop_file);
+                            }
+                            Err(e) => {
+                                debug!("Failed to parse {}: {}", path.display(), e);
                             }
                         }
                     }
-                } else {
-                    debug!("Cannot read directory: {}", dir.display());
                 }
             }
 
