@@ -248,14 +248,7 @@ impl OpenWith {
             .run(&self.config, applications, file_name, &fuzzer_name)
     }
 
-    fn execute_regex_handler(&self, handler: &RegexHandler, target: &LaunchTarget) -> Result<()> {
-        if handler.terminal {
-            info!(
-                "Regex handler requests terminal execution; launching command directly: {}",
-                handler.exec
-            );
-        }
-
+    fn application_from_regex(handler: &RegexHandler) -> ApplicationEntry {
         let mut app = ApplicationEntry {
             name: handler
                 .notes
@@ -278,7 +271,7 @@ impl OpenWith {
             }
         }
 
-        self.executor.execute(&app, target)
+        app
     }
 
     fn execute_application(&self, app: &ApplicationEntry, target: &LaunchTarget) -> Result<()> {
@@ -340,16 +333,29 @@ impl OpenWith {
         info!("MIME type: {mime_type}");
 
         let candidate = target.as_command_argument().into_owned();
-        if let Some(regex_handler) = self.regex_handlers.find_handler(&candidate) {
+        let regex_entry = self.regex_handlers.find_handler(&candidate).map(|handler| {
             info!(
                 "Matched regex handler (priority {}): {}",
-                regex_handler.priority, regex_handler.exec
+                handler.priority, handler.exec
             );
-            self.execute_regex_handler(regex_handler, &target)?;
-            return Ok(());
+            if handler.terminal {
+                info!("Regex handler requests terminal execution");
+            }
+            Self::application_from_regex(handler)
+        });
+
+        if let Some(entry) = regex_entry.clone() {
+            if !self.config.selector.enable_selector {
+                info!("Selector disabled; launching regex handler directly");
+                self.execute_application(&entry, &target)?;
+                return Ok(());
+            }
         }
 
-        let applications = self.get_applications_for_mime(&mime_type);
+        let mut applications = self.get_applications_for_mime(&mime_type);
+        if let Some(entry) = regex_entry {
+            applications.insert(0, entry);
+        }
         debug!(
             "Found {} application(s); regex handler count: {}",
             applications.len(),
