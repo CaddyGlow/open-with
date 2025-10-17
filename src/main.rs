@@ -1529,6 +1529,7 @@ MimeType=text/plain;";
 
     #[test]
     #[cfg(unix)]
+    #[serial]
     fn test_regex_handler_executes_command() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1580,7 +1581,15 @@ MimeType=text/plain;";
         let app = OpenWith::new(args).unwrap();
         app.run().unwrap();
 
-        std::thread::sleep(Duration::from_millis(100));
+        let mut attempts = 0;
+        while attempts < 20 {
+            if marker_path.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            attempts += 1;
+        }
+
         assert!(
             marker_path.exists(),
             "regex handler script should have touched marker file"
