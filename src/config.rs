@@ -26,7 +26,7 @@ impl Default for SelectorConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct FuzzyFinderConfig {
     pub command: String,
@@ -38,22 +38,6 @@ pub struct FuzzyFinderConfig {
     pub marker_available: Option<String>,
     pub prompt_template: Option<String>,
     pub header_template: Option<String>,
-}
-
-impl Default for FuzzyFinderConfig {
-    fn default() -> Self {
-        Self {
-            command: String::new(),
-            args: Vec::new(),
-            env: HashMap::new(),
-            entry_template: String::new(),
-            marker_default: None,
-            marker_xdg: None,
-            marker_available: None,
-            prompt_template: None,
-            header_template: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,9 +171,10 @@ impl Config {
         }
 
         if let Some(selector) = Self::load_handlr_selector_config()? {
-            let mut config = Self::default();
-            config.selector = selector;
-            return Ok(config);
+            return Ok(Self {
+                selector,
+                ..Default::default()
+            });
         }
 
         // Return default config if file doesn't exist or can't be parsed
