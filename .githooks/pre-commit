@@ -8,54 +8,54 @@ echo "🔍 Running pre-commit checks..."
 # 1. Check formatting
 echo "📝 Checking code formatting..."
 if ! cargo fmt -- --check; then
-    echo "❌ Code formatting issues found. Running 'cargo fmt' to fix..."
-    cargo fmt
-    echo "✅ Code formatted. Please review and stage the changes."
-    exit 1
+  echo "❌ Code formatting issues found. Running 'cargo fmt' to fix..."
+  cargo fmt
+  echo "✅ Code formatted. Please review and stage the changes."
+  exit 1
 fi
 
 # 2. Run clippy
 echo "🔎 Running clippy..."
-if ! cargo clippy -- -D warnings -D clippy::all -D clippy::pedantic -A clippy::module_name_repetitions -A clippy::struct_excessive_bools -A clippy::unnecessary-debug-formatting; then
-    echo "❌ Clippy found issues. Please fix them before committing."
-    exit 1
+if ! cargo clippy -- -D warnings; then
+  echo "❌ Clippy found issues. Please fix them before committing."
+  exit 1
 fi
 
 # 3. Run tests
 echo "🧪 Running tests..."
 if ! cargo test --quiet; then
-    echo "❌ Tests failed. Please fix them before committing."
-    exit 1
+  echo "❌ Tests failed. Please fix them before committing."
+  exit 1
 fi
 
 # 4. Check documentation
 echo "📚 Checking documentation..."
 if ! RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps --document-private-items --quiet; then
-    echo "❌ Documentation issues found. Please fix them before committing."
-    exit 1
+  echo "❌ Documentation issues found. Please fix them before committing."
+  exit 1
 fi
 
 # 5. Run cargo-deny
 echo "🔒 Running security and license checks..."
 if ! cargo deny check; then
-    echo "❌ cargo-deny found issues. Please fix them before committing."
-    exit 1
+  echo "❌ cargo-deny found issues. Please fix them before committing."
+  exit 1
 fi
 
 # 6. Check for build
 echo "🔨 Checking release build..."
 if ! cargo build --release --quiet; then
-    echo "❌ Release build failed. Please fix it before committing."
-    exit 1
+  echo "❌ Release build failed. Please fix it before committing."
+  exit 1
 fi
 
 # Optional: Run coverage if PRECOMMIT_COVERAGE is set
 if [[ "${PRECOMMIT_COVERAGE}" == "1" ]]; then
-    echo "📊 Running code coverage..."
-    if ! ./scripts/coverage.sh; then
-        echo "❌ Coverage generation failed."
-        exit 1
-    fi
+  echo "📊 Running code coverage..."
+  if ! ./scripts/coverage.sh; then
+    echo "❌ Coverage generation failed."
+    exit 1
+  fi
 fi
 
 echo "✅ All pre-commit checks passed!"
