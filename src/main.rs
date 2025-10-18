@@ -665,6 +665,7 @@ impl OpenWith {
 
 fn handle_command(command: Command) -> Result<()> {
     match command {
+        Command::Open(_) => unreachable!("open subcommand should be handled separately"),
         Command::Set(args) => {
             let mime = normalize_mime_input(&args.mime)?;
             ensure_handler_exists(&args.handler)?;
@@ -938,17 +939,7 @@ fn should_skip_handler_validation() -> bool {
     cfg!(test) && std::env::var("OPEN_WITH_SKIP_HANDLER_VALIDATION").is_ok()
 }
 
-fn main() -> Result<()> {
-    clap_complete::CompleteEnv::with_factory(|| Cli::command().name("openit"))
-        .completer("openit")
-        .complete();
-
-    let Cli { open, command } = Cli::parse();
-
-    if let Some(command) = command {
-        return handle_command(command);
-    }
-
+fn run_open(open: OpenArgs) -> Result<()> {
     if open.build_info {
         cli::show_build_info();
         return Ok(());
@@ -957,7 +948,6 @@ fn main() -> Result<()> {
     if open.generate_config {
         let config = config::Config::default();
         if let Some(custom_path) = &open.config {
-            // Save to custom path
             if let Some(parent) = custom_path.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -968,7 +958,6 @@ fn main() -> Result<()> {
                 custom_path.display()
             );
         } else {
-            // Save to default path
             config.save()?;
             println!(
                 "Generated default configuration at: {}",
@@ -986,6 +975,19 @@ fn main() -> Result<()> {
 
     let app = OpenWith::new(open)?;
     app.run()
+}
+
+fn main() -> Result<()> {
+    clap_complete::CompleteEnv::with_factory(|| Cli::command().name("openit"))
+        .completer("openit")
+        .complete();
+
+    let cli = Cli::parse();
+
+    match cli.command {
+        Command::Open(open) => run_open(open),
+        command => handle_command(command),
+    }
 }
 
 #[cfg(test)]

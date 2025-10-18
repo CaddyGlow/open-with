@@ -37,11 +37,8 @@ impl SelectorKind {
     subcommand_precedence_over_arg = true
 )]
 pub struct Cli {
-    #[command(flatten)]
-    pub open: OpenArgs,
-
     #[command(subcommand)]
-    pub command: Option<Command>,
+    pub command: Command,
 }
 
 #[derive(ClapArgs, Debug, Clone)]
@@ -100,6 +97,8 @@ pub struct OpenArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Command {
+    /// Open a resource using the configured handlers.
+    Open(OpenArgs),
     /// Set the default handler for a MIME type or extension.
     Set(EditArgs),
     /// Add an additional handler (after the default) for a MIME type or extension.
@@ -247,30 +246,46 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
-    fn test_cli_default_open() {
-        let cli = Cli::try_parse_from(["openit", "file.txt"]).unwrap();
-        assert!(cli.command.is_none());
-        assert_eq!(cli.open.target.as_deref(), Some("file.txt"));
-        assert_eq!(cli.open.selector, SelectorKind::Auto);
+    fn test_cli_open_subcommand() {
+        let cli = Cli::try_parse_from(["openit", "open", "file.txt"]).unwrap();
+        match cli.command {
+            Command::Open(open) => {
+                assert_eq!(open.target.as_deref(), Some("file.txt"));
+                assert_eq!(open.selector, SelectorKind::Auto);
+            }
+            other => panic!("Expected open command, got {other:?}"),
+        }
     }
 
     #[test]
     fn test_cli_named_selector_profile() {
-        let cli = Cli::try_parse_from(["openit", "--selector", "rofi", "file.txt"]).unwrap();
-        assert_eq!(cli.open.selector, SelectorKind::Named("rofi".to_string()));
+        let cli =
+            Cli::try_parse_from(["openit", "open", "--selector", "rofi", "file.txt"]).unwrap();
+        match cli.command {
+            Command::Open(open) => {
+                assert_eq!(open.selector, SelectorKind::Named("rofi".to_string()));
+            }
+            other => panic!("Expected open command, got {other:?}"),
+        }
     }
 
     #[test]
     fn test_cli_set_subcommand() {
         let cli = Cli::try_parse_from(["openit", "set", "text/plain", "helix.desktop"]).unwrap();
         match cli.command {
-            Some(Command::Set(args)) => {
+            Command::Set(args) => {
                 assert_eq!(args.mime, "text/plain");
                 assert_eq!(args.handler, "helix.desktop");
                 assert!(!args.expand_wildcards);
             }
             _ => panic!("Expected set command"),
         }
+    }
+
+    #[test]
+    fn test_cli_requires_subcommand() {
+        let cli = Cli::try_parse_from(["openit"]);
+        assert!(cli.is_err(), "CLI should require an explicit subcommand");
     }
 
     #[test]
