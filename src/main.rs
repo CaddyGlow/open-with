@@ -44,7 +44,7 @@ use target::LaunchTarget;
 use template::TemplateEngine;
 
 #[derive(Debug)]
-struct OpenWith {
+struct OpenIt {
     application_finder: ApplicationFinder,
     fuzzy_finder_runner: FuzzyFinderRunner,
     selector_runner: SelectorRunner,
@@ -54,7 +54,7 @@ struct OpenWith {
     args: OpenArgs,
 }
 
-impl OpenWith {
+impl OpenIt {
     fn new(args: OpenArgs) -> Result<Self> {
         if args.clear_cache {
             Self::clear_cache()?;
@@ -740,7 +740,7 @@ fn handle_command(command: Command) -> Result<()> {
             use wildmatch::WildMatch;
 
             let pattern = normalize_mime_input(&args.mime)?;
-            let desktop_cache = OpenWith::load_desktop_cache();
+            let desktop_cache = OpenIt::load_desktop_cache();
             let mime_associations = MimeAssociations::load();
             let application_finder = ApplicationFinder::new(desktop_cache, mime_associations);
 
@@ -922,7 +922,7 @@ fn ensure_handler_exists(handler: &str) -> Result<()> {
         return Ok(());
     }
 
-    let cache = OpenWith::load_desktop_cache();
+    let cache = OpenIt::load_desktop_cache();
     let finder = ApplicationFinder::new(cache, MimeAssociations::default());
 
     if finder.find_desktop_file(handler).is_none() {
@@ -973,7 +973,7 @@ fn run_open(open: OpenArgs) -> Result<()> {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     }
 
-    let app = OpenWith::new(open)?;
+    let app = OpenIt::new(open)?;
     app.run()
 }
 
@@ -1057,7 +1057,7 @@ mod tests {
         );
 
         // Initial population simulates a full rebuild
-        assert!(OpenWith::populate_cache_from_dirs(
+        assert!(OpenIt::populate_cache_from_dirs(
             &mut cache,
             &[apps_dir.clone()],
             true
@@ -1073,7 +1073,7 @@ mod tests {
 
         // Running without a rebuild should still capture the new desktop file
         assert!(
-            OpenWith::populate_cache_from_dirs(&mut cache, &[apps_dir.clone()], false),
+            OpenIt::populate_cache_from_dirs(&mut cache, &[apps_dir.clone()], false),
             "populate_cache_from_dirs should report updates when new files are discovered"
         );
 
@@ -1218,7 +1218,7 @@ mod tests {
 
     #[test]
     fn test_cache_path_creation() {
-        let cache_path = OpenWith::cache_path();
+        let cache_path = OpenIt::cache_path();
         assert!(cache_path.ends_with("openit/desktop_cache.json"));
     }
 
@@ -1350,7 +1350,7 @@ Exec=test";
         let cache_file = temp_dir.path().join("desktop_cache.json");
         let _cache_env = CacheEnvGuard::set(&cache_file);
 
-        // Test that OpenWith::new succeeds when clear_cache is true
+        // Test that OpenIt::new succeeds when clear_cache is true
         // This should work even in environments with no desktop files
         let args = OpenArgs {
             target: Some("test.txt".to_string()),
@@ -1378,24 +1378,24 @@ Exec=test";
         // 1. No cache exists to clear
         // 2. No desktop directories exist
         // 3. Cache directory can't be created
-        let result = OpenWith::new(args);
+        let result = OpenIt::new(args);
 
         // If it fails, print the error for debugging
         if let Err(ref e) = result {
-            eprintln!("OpenWith::new failed with error: {e}");
+            eprintln!("OpenIt::new failed with error: {e}");
             eprintln!("Error chain: {e:?}");
         }
 
         assert!(
             result.is_ok(),
-            "OpenWith::new should handle missing cache and desktop files gracefully"
+            "OpenIt::new should handle missing cache and desktop files gracefully"
         );
     }
 
     #[test]
     fn test_get_applications_for_mime_empty() {
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
-        let app = OpenWith::new(args).unwrap();
+        let app = OpenIt::new(args).unwrap();
 
         let apps = app.get_applications_for_mime("application/unknown");
         assert!(apps.is_empty());
@@ -1419,8 +1419,8 @@ Exec=test";
         // Verify file exists
         assert!(cache_file.exists());
 
-        // Clear the specific cache file via OpenWith helper
-        let result = OpenWith::clear_cache();
+        // Clear the specific cache file via OpenIt helper
+        let result = OpenIt::clear_cache();
         assert!(result.is_ok());
         assert!(!cache_file.exists());
     }
@@ -1428,7 +1428,7 @@ Exec=test";
     #[test]
     fn test_output_json() {
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
-        let app = OpenWith::new(args).unwrap();
+        let app = OpenIt::new(args).unwrap();
 
         let applications = vec![ApplicationEntry {
             name: "Test App".to_string(),
@@ -1454,9 +1454,9 @@ Exec=test";
 
     #[test]
     fn test_resolve_launch_target_with_uri() {
-        let target = OpenWith::resolve_launch_target("https://example.com").unwrap();
+        let target = OpenIt::resolve_launch_target("https://example.com").unwrap();
         assert!(matches!(target, LaunchTarget::Uri(_)));
-        assert_eq!(OpenWith::mime_for_target(&target), "x-scheme-handler/https");
+        assert_eq!(OpenIt::mime_for_target(&target), "x-scheme-handler/https");
     }
 
     #[test]
@@ -1466,7 +1466,7 @@ Exec=test";
         fs::write(&file_path, "content").unwrap();
         let uri = Url::from_file_path(&file_path).expect("valid file uri");
 
-        let target = OpenWith::resolve_launch_target(uri.as_str()).unwrap();
+        let target = OpenIt::resolve_launch_target(uri.as_str()).unwrap();
         match target {
             LaunchTarget::File(path) => {
                 assert_eq!(path, file_path.canonicalize().unwrap());
@@ -1493,7 +1493,7 @@ Exec=test";
             term_exec_args: None,
         };
 
-        let app = OpenWith::new(args).unwrap();
+        let app = OpenIt::new(args).unwrap();
         let result = app.run();
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "No target provided");
@@ -1517,7 +1517,7 @@ Exec=test";
             term_exec_args: None,
         };
 
-        let app = OpenWith::new(args).unwrap();
+        let app = OpenIt::new(args).unwrap();
         let result = app.run();
         assert!(result.is_err());
         assert!(result
@@ -1550,7 +1550,7 @@ Exec=test";
         };
 
         // This should succeed even if no cache file exists
-        let app = OpenWith::new(args).unwrap();
+        let app = OpenIt::new(args).unwrap();
         let result = app.run();
         assert!(result.is_ok());
     }
@@ -1729,7 +1729,7 @@ Exec=test";
             term_exec_args: None,
         };
 
-        let app = OpenWith::new(args).unwrap();
+        let app = OpenIt::new(args).unwrap();
         let result = app.run();
         assert!(result.is_err());
         assert!(result
@@ -1760,7 +1760,7 @@ Exec=test";
             term_exec_args: None,
         };
 
-        let _app = OpenWith::new(args).unwrap();
+        let _app = OpenIt::new(args).unwrap();
         let result = _app.run();
         assert!(result.is_err());
 
@@ -1789,7 +1789,7 @@ Exec=test";
         std::env::set_var("HOME", temp_dir.path());
 
         // Should handle invalid cache gracefully and rebuild
-        let cache = OpenWith::load_desktop_cache();
+        let cache = OpenIt::load_desktop_cache();
 
         // Cache should be empty or contain whatever desktop files are found
         assert!(cache.is_empty() || !cache.is_empty());
@@ -1810,7 +1810,7 @@ Exec=test";
         // the error path by mocking the scenario
 
         // The clear_cache function already handles errors gracefully
-        let result = OpenWith::clear_cache();
+        let result = OpenIt::clear_cache();
         assert!(result.is_ok());
     }
 
@@ -1834,7 +1834,7 @@ Exec=test";
         };
 
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
-        let _app = OpenWith::new(args).unwrap();
+        let _app = OpenIt::new(args).unwrap();
 
         // Test the fuzzy finder detection logic without asserting on specific availability
         let _ = which::which("fzf");
@@ -1846,7 +1846,7 @@ Exec=test";
         // Test JSON output functionality with a controlled environment
         // We can't rely on desktop files in build environments, so test the JSON output format
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
-        let app = OpenWith::new(args).unwrap();
+        let app = OpenIt::new(args).unwrap();
 
         let applications = vec![ApplicationEntry {
             name: "Test App".to_string(),
@@ -1935,7 +1935,7 @@ Exec=test";
         let regex_handlers = RegexHandlerStore::load(None).unwrap();
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
 
-        let open_with = OpenWith {
+        let open_with = OpenIt {
             application_finder,
             fuzzy_finder_runner: FuzzyFinderRunner::new(),
             selector_runner: SelectorRunner::new(),
@@ -1984,7 +1984,7 @@ Exec=test";
         let regex_handlers = RegexHandlerStore::load(None).unwrap();
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
 
-        let open_with = OpenWith {
+        let open_with = OpenIt {
             application_finder,
             fuzzy_finder_runner: FuzzyFinderRunner::new(),
             selector_runner: SelectorRunner::new(),
@@ -2012,7 +2012,7 @@ Exec=test";
         let regex_handlers = RegexHandlerStore::load(None).unwrap();
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
 
-        let open_with = OpenWith {
+        let open_with = OpenIt {
             application_finder,
             fuzzy_finder_runner: FuzzyFinderRunner::new(),
             selector_runner: SelectorRunner::new(),
@@ -2082,7 +2082,7 @@ MimeType=text/plain;";
         std::env::set_var("HOME", &readonly_dir);
 
         // Should still work even if cache can't be saved
-        let cache = OpenWith::load_desktop_cache();
+        let cache = OpenIt::load_desktop_cache();
 
         // Restore HOME and permissions
         std::env::remove_var("HOME");
@@ -2128,7 +2128,7 @@ MimeType=text/plain;";
         };
 
         // Create an app - it will have empty cache for unknown mime types
-        let app = OpenWith::new(args).unwrap();
+        let app = OpenIt::new(args).unwrap();
         let result = app.run();
 
         // The result depends on what applications are available on the system
@@ -2191,7 +2191,7 @@ MimeType=text/plain;";
             term_exec_args: None,
         };
 
-        let app = OpenWith::new(args).unwrap();
+        let app = OpenIt::new(args).unwrap();
         app.run().unwrap();
 
         let mut attempts = 0;
