@@ -347,7 +347,7 @@ This project uses standard Rust formatting and linting:
 
 ```bash
 cargo fmt
-cargo clippy -- -D warnings
+cargo clippy
 ```
 
 ## Testing

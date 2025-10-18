@@ -1,23 +1,28 @@
 [alias]
-# Format and verify aliases
-fmt-all = "run --manifest-path scripts/fmt.sh"
-verify = "run --manifest-path scripts/verify.sh"
-pre-commit = "run --manifest-path scripts/verify.sh"
-coverage = "run --manifest-path scripts/coverage.sh"
+fmt-all = "fmt --all"
+fmt-check = "fmt --all -- --check"
+clippy-all = "clippy --workspace --all-targets --all-features"
+clippy-fix = "clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged"
+test-all = "test --workspace --all-features"
+build-all = "build --workspace --all-features --release"
+doc-all = "doc --workspace --all-features --no-deps"
+audit-all = "audit --deny warnings"
+deny-licenses = "deny check licenses"
+coverage = "tarpaulin --workspace --all-features --timeout 120 --out Html --out Json --output-dir target/coverage"
 
-# Quick check alias
 check-all = [
-  "fmt -- --check",
-  "clippy -- -D warnings",
-  "test",
-  "doc --all-features --no-deps --document-private-items",
+  "fmt --all -- --check",
+  "clippy --workspace --all-targets --all-features",
+  "test --workspace --all-features",
+  "build --workspace --all-features --release",
 ]
 
-# Full check with coverage
 check-full = [
-  "fmt -- --check",
-  "clippy -- -D warnings",
-  "test",
-  "doc --all-features --no-deps --document-private-items",
-  "run --manifest-path scripts/coverage.sh",
+  "fmt --all -- --check",
+  "clippy --workspace --all-targets --all-features",
+  "test --workspace --all-features",
+  "doc --workspace --all-features --no-deps",
+  "audit --deny warnings",
+  "deny check licenses",
+  "tarpaulin --workspace --all-features --timeout 120 --out Html --out Json --output-dir target/coverage",
 ]

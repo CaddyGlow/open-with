@@ -33,3 +33,7 @@ cobertura.xml
 tarpaulin-report.html
 
 *bak
+
+AGENTS.md
+CLAUDE.md
+.claude/

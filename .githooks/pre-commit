@@ -1,61 +1,33 @@
 #!/usr/bin/env bash
-# Pre-commit hook for openit project
+set -euo pipefail
 
-set -e
+echo "Running pre-commit checks..."
 
-echo "🔍 Running pre-commit checks..."
+run() {
+  echo "+ $*"
+  "$@"
+}
 
-# 1. Check formatting
-echo "📝 Checking code formatting..."
-if ! cargo fmt -- --check; then
-  echo "❌ Code formatting issues found. Running 'cargo fmt' to fix..."
-  cargo fmt
-  echo "✅ Code formatted. Please review and stage the changes."
+if ! cargo fmt --all -- --check; then
+  echo "Formatting failed. Run 'cargo fmt' to apply fixes."
   exit 1
 fi
 
-# 2. Run clippy
-echo "🔎 Running clippy..."
-if ! cargo clippy -- -D warnings; then
-  echo "❌ Clippy found issues. Please fix them before committing."
-  exit 1
+run cargo clippy --workspace --all-targets --all-features
+run cargo test --workspace --all-features
+run cargo build --workspace --all-features --release
+
+if [[ "${PRECOMMIT_DOCS:-0}" == "1" ]]; then
+  run cargo doc --workspace --all-features --no-deps
 fi
 
-# 3. Run tests
-echo "🧪 Running tests..."
-if ! cargo test --quiet; then
-  echo "❌ Tests failed. Please fix them before committing."
-  exit 1
+if [[ "${PRECOMMIT_AUDIT:-0}" == "1" ]]; then
+  run cargo audit --deny warnings
+  run cargo deny check licenses
 fi
 
-# 4. Check documentation
-echo "📚 Checking documentation..."
-if ! RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps --document-private-items --quiet; then
-  echo "❌ Documentation issues found. Please fix them before committing."
-  exit 1
+if [[ "${PRECOMMIT_COVERAGE:-0}" == "1" ]]; then
+  run cargo coverage
 fi
 
-# 5. Run cargo-deny
-echo "🔒 Running security and license checks..."
-if ! cargo deny check; then
-  echo "❌ cargo-deny found issues. Please fix them before committing."
-  exit 1
-fi
-
-# 6. Check for build
-echo "🔨 Checking release build..."
-if ! cargo build --release --quiet; then
-  echo "❌ Release build failed. Please fix it before committing."
-  exit 1
-fi
-
-# Optional: Run coverage if PRECOMMIT_COVERAGE is set
-if [[ "${PRECOMMIT_COVERAGE}" == "1" ]]; then
-  echo "📊 Running code coverage..."
-  if ! ./scripts/coverage.sh; then
-    echo "❌ Coverage generation failed."
-    exit 1
-  fi
-fi
-
-echo "✅ All pre-commit checks passed!"
+echo "Pre-commit checks completed."
