@@ -2,7 +2,7 @@ use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, ValueEnum, PartialEq)]
-pub enum FuzzyFinder {
+pub enum SelectorKind {
     Fzf,
     Fuzzel,
     Auto,
@@ -29,9 +29,9 @@ pub struct OpenArgs {
     /// Resource to open; accepts filesystem paths or URIs.
     pub target: Option<String>,
 
-    /// Fuzzy finder to use
-    #[arg(long, value_enum, default_value = "auto")]
-    pub fuzzer: FuzzyFinder,
+    /// Selector profile to use
+    #[arg(long, value_enum, default_value = "auto", alias = "fuzzer")]
+    pub selector: SelectorKind,
 
     /// Output JSON instead of interactive mode
     #[arg(short, long)]
@@ -201,7 +201,7 @@ mod tests {
         let cli = Cli::try_parse_from(["open-with", "file.txt"]).unwrap();
         assert!(cli.command.is_none());
         assert_eq!(cli.open.target.as_deref(), Some("file.txt"));
-        assert_eq!(cli.open.fuzzer, FuzzyFinder::Auto);
+        assert_eq!(cli.open.selector, SelectorKind::Auto);
     }
 
     #[test]

@@ -1,21 +1,19 @@
 use anyhow::{Context, Result};
-use log::debug;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use toml::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct SelectorConfig {
+pub struct SelectorSettings {
     pub enable_selector: bool,
     pub selector: String,
     pub term_exec_args: Option<String>,
     pub expand_wildcards: bool,
 }
 
-impl Default for SelectorConfig {
+impl Default for SelectorSettings {
     fn default() -> Self {
         Self {
             enable_selector: true,
@@ -28,7 +26,7 @@ impl Default for SelectorConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct FuzzyFinderConfig {
+pub struct SelectorProfile {
     pub command: String,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
@@ -44,8 +42,9 @@ pub struct FuzzyFinderConfig {
 #[serde(default)]
 pub struct Config {
     #[serde(flatten)]
-    pub selector: SelectorConfig,
-    pub fuzzy_finders: HashMap<String, FuzzyFinderConfig>,
+    pub selector: SelectorSettings,
+    #[serde(rename = "selectors")]
+    pub selector_profiles: HashMap<String, SelectorProfile>,
     pub marker_default: String,
     pub marker_xdg: String,
     pub marker_available: String,
@@ -55,12 +54,12 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let mut fuzzy_finders = HashMap::new();
+        let mut selector_profiles = HashMap::new();
 
         // Default fzf configuration
-        fuzzy_finders.insert(
+        selector_profiles.insert(
             "fzf".to_string(),
-            FuzzyFinderConfig {
+            SelectorProfile {
                 command: "fzf".to_string(),
                 args: vec![
                     "--prompt".to_string(),
@@ -81,9 +80,9 @@ impl Default for Config {
         );
 
         // Default fuzzel configuration
-        fuzzy_finders.insert(
+        selector_profiles.insert(
             "fuzzel".to_string(),
-            FuzzyFinderConfig {
+            SelectorProfile {
                 command: "fuzzel".to_string(),
                 args: vec![
                     "--dmenu".to_string(),
@@ -103,8 +102,8 @@ impl Default for Config {
         );
 
         Self {
-            selector: SelectorConfig::default(),
-            fuzzy_finders,
+            selector: SelectorSettings::default(),
+            selector_profiles,
             marker_default: "★ ".to_string(),
             marker_xdg: "▶ ".to_string(),
             marker_available: "  ".to_string(),
@@ -125,38 +124,6 @@ impl Config {
         Ok(config)
     }
 
-    fn load_handlr_selector_config() -> Result<Option<SelectorConfig>> {
-        let handlr_path = Self::handlr_config_path();
-
-        if !handlr_path.exists() {
-            return Ok(None);
-        }
-
-        let contents = match fs::read_to_string(&handlr_path) {
-            Ok(contents) => contents,
-            Err(err) => {
-                debug!(
-                    "Failed to read handlr config at {}: {}",
-                    handlr_path.display(),
-                    err
-                );
-                return Ok(None);
-            }
-        };
-
-        match toml::from_str::<HandlrCompatConfig>(&contents) {
-            Ok(raw) => Ok(Some(raw.into_selector_config())),
-            Err(err) => {
-                debug!(
-                    "Failed to parse handlr config at {}: {}",
-                    handlr_path.display(),
-                    err
-                );
-                Ok(None)
-            }
-        }
-    }
-
     pub fn load(custom_path: Option<PathBuf>) -> Result<Self> {
         if let Some(path) = custom_path {
             return Self::load_from_path(&path);
@@ -168,13 +135,6 @@ impl Config {
             if let Ok(config) = Self::load_from_path(&config_path) {
                 return Ok(config);
             }
-        }
-
-        if let Some(selector) = Self::load_handlr_selector_config()? {
-            return Ok(Self {
-                selector,
-                ..Default::default()
-            });
         }
 
         // Return default config if file doesn't exist or can't be parsed
@@ -208,25 +168,25 @@ impl Config {
             .join("handlr.toml")
     }
 
-    pub fn get_fuzzy_finder(&self, name: &str) -> Option<&FuzzyFinderConfig> {
-        self.fuzzy_finders.get(name)
+    pub fn get_selector_profile(&self, name: &str) -> Option<&SelectorProfile> {
+        self.selector_profiles.get(name)
     }
 
     pub fn get_marker<'a>(
         &'a self,
-        fuzzer_config: &'a FuzzyFinderConfig,
+        selector_profile: &'a SelectorProfile,
         marker_type: &str,
     ) -> &'a str {
         match marker_type {
-            "default" => fuzzer_config
+            "default" => selector_profile
                 .marker_default
                 .as_ref()
                 .unwrap_or(&self.marker_default),
-            "xdg" => fuzzer_config
+            "xdg" => selector_profile
                 .marker_xdg
                 .as_ref()
                 .unwrap_or(&self.marker_xdg),
-            "available" => fuzzer_config
+            "available" => selector_profile
                 .marker_available
                 .as_ref()
                 .unwrap_or(&self.marker_available),
@@ -234,15 +194,15 @@ impl Config {
         }
     }
 
-    pub fn get_prompt_template<'a>(&'a self, fuzzer_config: &'a FuzzyFinderConfig) -> &'a str {
-        fuzzer_config
+    pub fn get_prompt_template<'a>(&'a self, selector_profile: &'a SelectorProfile) -> &'a str {
+        selector_profile
             .prompt_template
             .as_ref()
             .unwrap_or(&self.prompt_template)
     }
 
-    pub fn get_header_template<'a>(&'a self, fuzzer_config: &'a FuzzyFinderConfig) -> &'a str {
-        fuzzer_config
+    pub fn get_header_template<'a>(&'a self, selector_profile: &'a SelectorProfile) -> &'a str {
+        selector_profile
             .header_template
             .as_ref()
             .unwrap_or(&self.header_template)
@@ -261,10 +221,10 @@ mod tests {
         assert!(config.selector.enable_selector);
         assert_eq!(config.selector.selector, "rofi -dmenu -i -p 'Open With: '");
         // Should have default fzf and fuzzel configs
-        assert!(config.fuzzy_finders.contains_key("fzf"));
-        assert!(config.fuzzy_finders.contains_key("fuzzel"));
+        assert!(config.selector_profiles.contains_key("fzf"));
+        assert!(config.selector_profiles.contains_key("fuzzel"));
 
-        let fzf_config = config.get_fuzzy_finder("fzf").unwrap();
+        let fzf_config = config.get_selector_profile("fzf").unwrap();
         assert_eq!(fzf_config.command, "fzf");
         assert!(fzf_config.args.contains(&"--reverse".to_string()));
     }
@@ -275,18 +235,21 @@ mod tests {
 
         // Test serialization
         let toml_string = toml::to_string(&config).unwrap();
-        assert!(toml_string.contains("[fuzzy_finders.fzf]"));
+        assert!(toml_string.contains("[selectors.fzf]"));
 
         // Test deserialization
         let deserialized: Config = toml::from_str(&toml_string).unwrap();
-        assert_eq!(config.fuzzy_finders.len(), deserialized.fuzzy_finders.len());
+        assert_eq!(
+            config.selector_profiles.len(),
+            deserialized.selector_profiles.len()
+        );
     }
 
     #[test]
     fn test_add_custom_fuzzy_finder() {
         let mut config = Config::default();
 
-        let custom_config = FuzzyFinderConfig {
+        let custom_config = SelectorProfile {
             command: "custom-fuzzy".to_string(),
             args: vec!["--custom-arg".to_string()],
             env: HashMap::new(),
@@ -300,11 +263,11 @@ mod tests {
 
         // Test adding directly to the HashMap
         config
-            .fuzzy_finders
+            .selector_profiles
             .insert("custom".to_string(), custom_config);
 
-        assert!(config.fuzzy_finders.contains_key("custom"));
-        assert_eq!(config.fuzzy_finders.len(), 3);
+        assert!(config.selector_profiles.contains_key("custom"));
+        assert_eq!(config.selector_profiles.len(), 3);
     }
 
     #[test]
@@ -323,7 +286,10 @@ mod tests {
         fs::write(&custom_path, contents).unwrap();
 
         let loaded = Config::load(Some(custom_path)).unwrap();
-        assert_eq!(loaded.fuzzy_finders.len(), original.fuzzy_finders.len());
+        assert_eq!(
+            loaded.selector_profiles.len(),
+            original.selector_profiles.len()
+        );
     }
 
     #[test]
@@ -351,95 +317,5 @@ mod tests {
             message.contains("Failed to parse config file"),
             "unexpected error message: {message}"
         );
-    }
-
-    #[test]
-    fn test_fallback_to_handlr_config() {
-        use std::env;
-        use std::ffi::OsString;
-
-        struct ConfigHomeGuard {
-            original: Option<OsString>,
-        }
-
-        impl ConfigHomeGuard {
-            fn set(path: &Path) -> Self {
-                let original = env::var_os("XDG_CONFIG_HOME");
-                env::set_var("XDG_CONFIG_HOME", path);
-                Self { original }
-            }
-        }
-
-        impl Drop for ConfigHomeGuard {
-            fn drop(&mut self) {
-                if let Some(original) = self.original.take() {
-                    env::set_var("XDG_CONFIG_HOME", original);
-                } else {
-                    env::remove_var("XDG_CONFIG_HOME");
-                }
-            }
-        }
-
-        let temp_dir = TempDir::new().unwrap();
-        let config_dir = temp_dir.path().join("config");
-        fs::create_dir_all(&config_dir).unwrap();
-        let _guard = ConfigHomeGuard::set(&config_dir);
-
-        let handlr_dir = config_dir.join("handlr");
-        fs::create_dir_all(&handlr_dir).unwrap();
-        let handlr_path = handlr_dir.join("handlr.toml");
-        let handlr_contents = r#"
-enable_selector = true
-selector = "wofi -dmenu"
-term_exec_args = "-x"
-expand_wildcards = true
-
-[[handlers]]
-exec = "dummy %f"
-regexes = ["foo"]
-"#;
-        fs::write(&handlr_path, handlr_contents).unwrap();
-
-        let config = Config::load(None).unwrap();
-        assert!(config.selector.enable_selector);
-        assert_eq!(config.selector.selector, "wofi -dmenu");
-        assert_eq!(config.selector.term_exec_args.as_deref(), Some("-x"));
-        assert!(config.selector.expand_wildcards);
-        assert!(config.get_fuzzy_finder("fzf").is_some());
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
-struct HandlrCompatConfig {
-    enable_selector: bool,
-    selector: String,
-    term_exec_args: Option<String>,
-    expand_wildcards: bool,
-    #[serde(flatten)]
-    _extra: HashMap<String, Value>,
-}
-
-impl Default for HandlrCompatConfig {
-    fn default() -> Self {
-        let selector = SelectorConfig::default();
-        Self {
-            enable_selector: selector.enable_selector,
-            selector: selector.selector,
-            term_exec_args: selector.term_exec_args,
-            expand_wildcards: selector.expand_wildcards,
-            _extra: HashMap::new(),
-        }
-    }
-}
-
-impl HandlrCompatConfig {
-    fn into_selector_config(self) -> SelectorConfig {
-        SelectorConfig {
-            enable_selector: self.enable_selector,
-            selector: self.selector,
-            term_exec_args: self.term_exec_args,
-            expand_wildcards: self.expand_wildcards,
-        }
     }
 }

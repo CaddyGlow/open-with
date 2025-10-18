@@ -1,5 +1,4 @@
 use crate::application_finder::ApplicationEntry;
-use crate::config::SelectorConfig;
 use anyhow::{Context, Result};
 use itertools::Itertools;
 use log::info;
@@ -16,59 +15,38 @@ impl SelectorRunner {
 
     pub fn run(
         &self,
-        selector_config: &SelectorConfig,
+        command: &str,
+        args: &[String],
         applications: &[ApplicationEntry],
     ) -> Result<Option<usize>> {
         if applications.is_empty() {
             return Ok(None);
         }
 
-        let command_spec = selector_config.selector.trim();
+        let command_spec = command.trim();
         if command_spec.is_empty() {
             return Err(anyhow::anyhow!("Selector command is empty"));
         }
 
-        let mut command_parts = shell_words::split(command_spec)
-            .map_err(|e| anyhow::anyhow!("Failed to parse selector command: {e}"))?;
-
-        if command_parts.is_empty() {
-            return Err(anyhow::anyhow!("Selector command is empty"));
-        }
-
-        if let Some(extra) = &selector_config.term_exec_args {
-            if !extra.trim().is_empty() {
-                let mut extra_parts = shell_words::split(extra).map_err(|e| {
-                    anyhow::anyhow!("Failed to parse selector terminal arguments: {e}")
-                })?;
-                command_parts.append(&mut extra_parts);
-            }
-        }
-
-        let mut cmd = Command::new(&command_parts[0]);
-        for arg in &command_parts[1..] {
+        let mut cmd = Command::new(command);
+        for arg in args {
             cmd.arg(arg);
         }
 
         cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
 
-        let mut child = cmd.spawn().with_context(|| {
-            format!(
-                "Failed to spawn selector command `{}`",
-                selector_config.selector
-            )
-        })?;
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("Failed to spawn selector command `{}`", command))?;
 
-        {
-            let stdin = child.stdin.as_mut().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Selector command `{}` has no stdin",
-                    selector_config.selector
-                )
-            })?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Selector command `{}` has no stdin", command))?;
 
-            for app in applications {
-                writeln!(stdin, "{}", app.name)?;
-            }
+        for app in applications {
+            let marker = marker_for_app(app);
+            writeln!(stdin, "{marker} {}", app.name)?;
         }
 
         let output = child
@@ -78,7 +56,7 @@ impl SelectorRunner {
         if !output.status.success() {
             info!(
                 "Selector command `{}` exited with status {:?}",
-                selector_config.selector,
+                command,
                 output.status.code()
             );
             return Ok(None);
@@ -86,16 +64,15 @@ impl SelectorRunner {
 
         let selection = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if selection.is_empty() {
-            info!(
-                "Selector command `{}` returned no selection",
-                selector_config.selector
-            );
+            info!("Selector command `{}` returned no selection", command);
             return Ok(None);
         }
 
+        let selection_cleaned = strip_marker(&selection);
+
         let index = applications
             .iter()
-            .position(|app| app.name == selection)
+            .position(|app| app.name == selection_cleaned)
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "Selector returned unknown selection `{selection}` (expected one of [{}])",
@@ -105,6 +82,27 @@ impl SelectorRunner {
 
         Ok(Some(index))
     }
+}
+
+fn marker_for_app(app: &ApplicationEntry) -> &'static str {
+    if app.desktop_file.starts_with("regex-handler-") {
+        "[regex]"
+    } else if app.is_default {
+        "[default]"
+    } else if app.is_xdg {
+        "[xdg]"
+    } else {
+        "[available]"
+    }
+}
+
+fn strip_marker(selection: &str) -> String {
+    if let Some(rest) = selection.strip_prefix('[') {
+        if let Some(idx) = rest.find(']') {
+            return rest[idx + 1..].trim_start().to_string();
+        }
+    }
+    selection.to_string()
 }
 
 #[cfg(all(test, unix))]
@@ -149,12 +147,13 @@ printf "%s" "$second"
         let (_dir, script_path) = create_script(script);
 
         let runner = SelectorRunner::new();
-        let mut selector_config = SelectorConfig::default();
-        selector_config.selector = format!("sh {}", script_path);
+        let command = "sh";
+        let args = vec![script_path.clone()];
 
-        let apps = vec![test_app("First"), test_app("Second")];
+        let mut apps = vec![test_app("First"), test_app("Second")];
+        apps[1].desktop_file = std::path::PathBuf::from("regex-handler-1.desktop");
 
-        let index = runner.run(&selector_config, &apps).unwrap();
+        let index = runner.run(command, &args, &apps).unwrap();
         assert_eq!(index, Some(1));
     }
 
@@ -168,12 +167,12 @@ exit 0
         let (_dir, script_path) = create_script(script);
 
         let runner = SelectorRunner::new();
-        let mut selector_config = SelectorConfig::default();
-        selector_config.selector = format!("sh {}", script_path);
+        let command = "sh";
+        let args = vec![script_path.clone()];
 
         let apps = vec![test_app("Only")];
 
-        let index = runner.run(&selector_config, &apps).unwrap();
+        let index = runner.run(command, &args, &apps).unwrap();
         assert_eq!(index, None);
     }
 
@@ -194,13 +193,12 @@ printf "%s" "$choice"
         let (_dir, script_path) = create_script(&script);
 
         let runner = SelectorRunner::new();
-        let mut selector_config = SelectorConfig::default();
-        selector_config.selector = format!("sh {}", script_path);
-        selector_config.term_exec_args = Some("--flag value".into());
+        let command = "sh";
+        let args = vec![script_path.clone(), "--flag".into(), "value".into()];
 
         let apps = vec![test_app("Only")];
 
-        let index = runner.run(&selector_config, &apps).unwrap();
+        let index = runner.run(command, &args, &apps).unwrap();
         assert_eq!(index, Some(0));
 
         let args_contents = fs::read_to_string(output_path).unwrap();
@@ -216,12 +214,12 @@ printf "Unknown"
         let (_dir, script_path) = create_script(script);
 
         let runner = SelectorRunner::new();
-        let mut selector_config = SelectorConfig::default();
-        selector_config.selector = format!("sh {}", script_path);
+        let command = "sh";
+        let args = vec![script_path.clone()];
 
         let apps = vec![test_app("One")];
 
-        let err = runner.run(&selector_config, &apps).unwrap_err();
+        let err = runner.run(command, &args, &apps).unwrap_err();
         assert!(err
             .to_string()
             .contains("Selector returned unknown selection"));

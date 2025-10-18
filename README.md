@@ -48,7 +48,7 @@ open-with document.pdf --json
 open-with image.png --actions
 
 # Use a specific fuzzy finder
-open-with file.txt --fuzzer fzf
+open-with file.txt --selector fzf
 ```
 
 ### Options
@@ -60,7 +60,7 @@ Arguments:
   [FILE]  File to open (not required when using --build-info or --clear-cache)
 
 Options:
-      --fuzzer <FUZZER>      Fuzzy finder to use [default: auto] [possible values: fzf, fuzzel, auto]
+      --selector <SELECTOR>  Selector profile to use [default: auto] [possible values: fzf, fuzzel, auto]
   -j, --json                 Output JSON instead of interactive mode
   -a, --actions              Show desktop actions as separate entries
       --clear-cache          Clear the desktop file cache
@@ -175,7 +175,7 @@ open-with --generate-config
 This creates `~/.config/open-with/config.toml` with the following structure:
 
 ```toml
-[fuzzy_finders.fzf]
+[selectors.fzf]
 command = "fzf"
 args = [
     "--prompt", "{prompt}",
@@ -186,7 +186,7 @@ args = [
 ]
 env = {}
 
-[fuzzy_finders.fuzzel]
+[selectors.fuzzel]
 command = "fuzzel"
 args = [
     "--dmenu",
@@ -210,7 +210,7 @@ The configuration supports template variables in command arguments:
 You can add custom fuzzy finder configurations:
 
 ```toml
-[fuzzy_finders.rofi]
+[selectors.rofi]
 command = "rofi"
 args = [
     "-dmenu",

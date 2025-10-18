@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use log::{debug, info};
+use shell_words::split;
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal};
@@ -30,7 +31,7 @@ pub mod built_info {
 
 use application_finder::{ApplicationEntry, ApplicationFinder};
 use cache::{DesktopCache, FileSystemCache};
-use cli::{Cli, Command, FuzzyFinder, OpenArgs};
+use cli::{Cli, Command, OpenArgs, SelectorKind};
 use desktop_parser::DesktopFile;
 use executor::ApplicationExecutor;
 use fuzzy_finder::FuzzyFinderRunner;
@@ -40,6 +41,7 @@ use mimeapps::MimeApps;
 use regex_handlers::{RegexHandler, RegexHandlerStore};
 use selector::SelectorRunner;
 use target::LaunchTarget;
+use template::TemplateEngine;
 
 #[derive(Debug)]
 struct OpenWith {
@@ -69,10 +71,6 @@ impl OpenWith {
 
         if let Some(enable_selector) = args.enable_selector {
             config.selector.enable_selector = enable_selector;
-        }
-
-        if let Some(selector_command) = args.selector_command.clone() {
-            config.selector.selector = selector_command;
         }
 
         if let Some(term_exec_args) = args.term_exec_args.clone() {
@@ -238,10 +236,10 @@ impl OpenWith {
         applications: &[ApplicationEntry],
         file_name: &str,
     ) -> Result<Option<usize>> {
-        let fuzzer_name = match &self.args.fuzzer {
-            FuzzyFinder::Auto => self.fuzzy_finder_runner.detect_available(&self.config)?,
-            FuzzyFinder::Fzf => "fzf".to_string(),
-            FuzzyFinder::Fuzzel => "fuzzel".to_string(),
+        let fuzzer_name = match &self.args.selector {
+            SelectorKind::Auto => self.fuzzy_finder_runner.detect_available(&self.config)?,
+            SelectorKind::Fzf => "fzf".to_string(),
+            SelectorKind::Fuzzel => "fuzzel".to_string(),
         };
 
         self.fuzzy_finder_runner
@@ -249,29 +247,29 @@ impl OpenWith {
     }
 
     fn application_from_regex(handler: &RegexHandler) -> ApplicationEntry {
-        let mut app = ApplicationEntry {
-            name: handler
-                .notes
-                .clone()
-                .unwrap_or_else(|| handler.exec.clone()),
+        let patterns = handler.patterns().join(", ");
+        let name = handler
+            .notes
+            .clone()
+            .unwrap_or_else(|| format!("Regex handler (prio {})", handler.priority));
+
+        let comment = if patterns.is_empty() {
+            format!("Regex handler -> {}", handler.exec)
+        } else {
+            format!("Regex handler -> {} [{patterns}]", handler.exec)
+        };
+
+        ApplicationEntry {
+            name,
             exec: handler.exec.clone(),
             desktop_file: PathBuf::from(format!("regex-handler-{}.desktop", handler.priority)),
-            comment: Some("Regex handler".to_string()),
+            comment: Some(comment),
             icon: None,
             is_xdg: false,
             xdg_priority: handler.priority,
             is_default: false,
             action_id: None,
-        };
-
-        if let Some(comment) = &mut app.comment {
-            let patterns = handler.patterns().join(", ");
-            if !patterns.is_empty() {
-                comment.push_str(&format!(" ({patterns})"));
-            }
         }
-
-        app
     }
 
     fn execute_application(&self, app: &ApplicationEntry, target: &LaunchTarget) -> Result<()> {
@@ -344,14 +342,6 @@ impl OpenWith {
             Self::application_from_regex(handler)
         });
 
-        if let Some(entry) = regex_entry.clone() {
-            if !self.config.selector.enable_selector {
-                info!("Selector disabled; launching regex handler directly");
-                self.execute_application(&entry, &target)?;
-                return Ok(());
-            }
-        }
-
         let mut applications = self.get_applications_for_mime(&mime_type);
         if let Some(entry) = regex_entry {
             applications.insert(0, entry);
@@ -361,6 +351,20 @@ impl OpenWith {
             applications.len(),
             self.regex_handlers.len()
         );
+
+        if !self.config.selector.enable_selector {
+            if let Some(first) = applications.first() {
+                if first
+                    .desktop_file
+                    .to_string_lossy()
+                    .starts_with("regex-handler-")
+                {
+                    info!("Selector disabled; launching regex handler directly");
+                    self.execute_application(first, &target)?;
+                    return Ok(());
+                }
+            }
+        }
 
         if applications.is_empty() {
             return Err(anyhow::anyhow!(
@@ -377,31 +381,140 @@ impl OpenWith {
                     info!("Auto-opening the only available application");
                     self.execute_application(&applications[0], &target)?;
                 } else {
+                    let (selector_cmd, selector_args) = if let Some(cmd) =
+                        &self.args.selector_command
+                    {
+                        let parts = split(cmd).map_err(|e| {
+                            anyhow::anyhow!("Failed to parse selector command: {e}")
+                        })?;
+                        let (first, rest) = parts
+                            .split_first()
+                            .ok_or_else(|| anyhow::anyhow!("Selector command is empty"))?;
+                        (
+                            first.to_string(),
+                            rest.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                        )
+                    } else {
+                        match &self.args.selector {
+                            SelectorKind::Auto => {
+                                let mut base = self.config.selector.selector.clone();
+                                if let Some(extra) = &self.config.selector.term_exec_args {
+                                    if !extra.trim().is_empty() {
+                                        base.push(' ');
+                                        base.push_str(extra);
+                                    }
+                                }
+                                let parts = split(&base).map_err(|e| {
+                                    anyhow::anyhow!("Failed to parse selector command: {e}")
+                                })?;
+                                let (first, rest) = parts
+                                    .split_first()
+                                    .ok_or_else(|| anyhow::anyhow!("Selector command is empty"))?;
+                                (
+                                    first.to_string(),
+                                    rest.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                                )
+                            }
+                            SelectorKind::Fzf | SelectorKind::Fuzzel => {
+                                let profile_name = match self.args.selector {
+                                    SelectorKind::Fzf => "fzf",
+                                    SelectorKind::Fuzzel => "fuzzel",
+                                    SelectorKind::Auto => unreachable!(),
+                                };
+
+                                if let Some(profile) =
+                                    self.config.get_selector_profile(profile_name)
+                                {
+                                    let display_name = target.display_name();
+                                    let mut template_engine = TemplateEngine::new();
+                                    template_engine.set("file", display_name.as_ref());
+                                    let prompt = template_engine
+                                        .render(self.config.get_prompt_template(profile));
+                                    let header = template_engine
+                                        .render(self.config.get_header_template(profile));
+                                    template_engine
+                                        .set("prompt", &prompt)
+                                        .set("header", &header);
+                                    let args = template_engine
+                                        .render_args(&profile.args)
+                                        .into_iter()
+                                        .collect::<Vec<_>>();
+                                    (profile.command.clone(), args)
+                                } else {
+                                    let parts =
+                                        split(&self.config.selector.selector).map_err(|e| {
+                                            anyhow::anyhow!("Failed to parse selector command: {e}")
+                                        })?;
+                                    let (first, rest) = parts.split_first().ok_or_else(|| {
+                                        anyhow::anyhow!("Selector command is empty")
+                                    })?;
+                                    (
+                                        first.to_string(),
+                                        rest.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                                    )
+                                }
+                            }
+                        }
+                    };
+
+                    let log_command = if selector_args.is_empty() {
+                        selector_cmd.clone()
+                    } else {
+                        format!("{} {}", selector_cmd, selector_args.join(" "))
+                    };
+
+                    info!("Launching selector: {}", log_command);
+
                     match self
                         .selector_runner
-                        .run(&self.config.selector, &applications)?
+                        .run(&selector_cmd, &selector_args, &applications)
                     {
-                        Some(index) => {
+                        Ok(Some(index)) => {
                             self.execute_application(&applications[index], &target)?;
                         }
-                        None => {
-                            info!("Selector cancelled; no application launched");
+                        Ok(None) => self.launch_with_fuzzy(&applications, &target)?,
+                        Err(err) => {
+                            info!(
+                                "Selector command failed ({}); falling back to fuzzy finder",
+                                err
+                            );
+                            self.launch_with_fuzzy(&applications, &target)?;
                         }
                     }
                 }
-            } else if applications.len() == 1 && self.args.auto_open_single {
-                info!("Auto-opening the only available application");
-                self.execute_application(&applications[0], &target)?;
             } else {
-                let display_name = target.display_name();
-                if let Some(index) = self.run_fuzzy_finder(&applications, display_name.as_ref())? {
-                    self.execute_application(&applications[index], &target)?;
-                }
+                self.launch_with_fuzzy(&applications, &target)?;
             }
         } else {
             self.output_json(&applications, &target, &mime_type)?;
         }
 
+        Ok(())
+    }
+
+    fn launch_with_fuzzy(
+        &self,
+        applications: &[ApplicationEntry],
+        target: &LaunchTarget,
+    ) -> Result<()> {
+        let single_is_regex = applications
+            .first()
+            .map(|app| {
+                app.desktop_file
+                    .to_string_lossy()
+                    .starts_with("regex-handler-")
+            })
+            .unwrap_or(false);
+
+        if applications.len() == 1 && (self.args.auto_open_single || single_is_regex) {
+            info!("Auto-opening the only available application");
+            self.execute_application(&applications[0], target)?;
+        } else {
+            let display_name = target.display_name();
+            if let Some(index) = self.run_fuzzy_finder(applications, display_name.as_ref())? {
+                self.execute_application(&applications[index], target)?;
+            }
+        }
         Ok(())
     }
 }
@@ -588,7 +701,7 @@ mod tests {
     fn create_test_args_json(target: Option<PathBuf>) -> OpenArgs {
         OpenArgs {
             target: target.map(|p| p.to_string_lossy().to_string()),
-            fuzzer: FuzzyFinder::Auto,
+            selector: SelectorKind::Auto,
             json: true, // Always use JSON in tests to avoid fuzzy finder
             actions: false,
             clear_cache: false,
@@ -870,7 +983,7 @@ Exec=test";
         // This should work even in environments with no desktop files
         let args = OpenArgs {
             target: Some("test.txt".to_string()),
-            fuzzer: FuzzyFinder::Auto,
+            selector: SelectorKind::Auto,
             json: false,
             actions: false,
             clear_cache: true,
@@ -993,7 +1106,7 @@ Exec=test";
     fn test_run_with_no_file() {
         let args = OpenArgs {
             target: None,
-            fuzzer: FuzzyFinder::Auto,
+            selector: SelectorKind::Auto,
             json: false,
             actions: false,
             clear_cache: false,
@@ -1017,7 +1130,7 @@ Exec=test";
     fn test_run_with_nonexistent_file() {
         let args = OpenArgs {
             target: Some("/nonexistent/file.txt".to_string()),
-            fuzzer: FuzzyFinder::Auto,
+            selector: SelectorKind::Auto,
             json: false,
             actions: false,
             clear_cache: false,
@@ -1049,7 +1162,7 @@ Exec=test";
 
         let args = OpenArgs {
             target: None,
-            fuzzer: FuzzyFinder::Auto,
+            selector: SelectorKind::Auto,
             json: false,
             actions: false,
             clear_cache: true,
@@ -1227,7 +1340,7 @@ Exec=test";
 
         let args = OpenArgs {
             target: Some(temp_dir.path().to_string_lossy().to_string()),
-            fuzzer: FuzzyFinder::Auto,
+            selector: SelectorKind::Auto,
             json: false,
             actions: false,
             clear_cache: false,
@@ -1258,7 +1371,7 @@ Exec=test";
 
         let args = OpenArgs {
             target: Some(temp_file.to_string_lossy().to_string()),
-            fuzzer: FuzzyFinder::Auto,
+            selector: SelectorKind::Auto,
             json: false,
             actions: false,
             clear_cache: false,
@@ -1331,7 +1444,7 @@ Exec=test";
         // Test fuzzy finder auto-detection logic without actually running it
         let _args = OpenArgs {
             target: Some("test.txt".to_string()),
-            fuzzer: FuzzyFinder::Auto,
+            selector: SelectorKind::Auto,
             json: true, // Use JSON to avoid running fuzzy finder
             actions: false,
             clear_cache: false,
@@ -1500,7 +1613,7 @@ MimeType=text/plain;";
 
         let args = OpenArgs {
             target: Some(test_file.to_string_lossy().to_string()),
-            fuzzer: FuzzyFinder::Auto,
+            selector: SelectorKind::Auto,
             json: true, // Use JSON to avoid fuzzy finder
             actions: false,
             clear_cache: false,
@@ -1570,7 +1683,7 @@ MimeType=text/plain;";
 
         let args = OpenArgs {
             target: Some(target_path.to_string_lossy().to_string()),
-            fuzzer: FuzzyFinder::Auto,
+            selector: SelectorKind::Auto,
             json: false,
             actions: false,
             clear_cache: false,
@@ -1578,7 +1691,7 @@ MimeType=text/plain;";
             build_info: false,
             generate_config: false,
             config: None,
-            auto_open_single: false,
+            auto_open_single: true,
             enable_selector: Some(false),
             selector_command: None,
             term_exec_args: None,
