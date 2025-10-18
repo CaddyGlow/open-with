@@ -238,8 +238,17 @@ impl OpenWith {
     ) -> Result<Option<usize>> {
         let fuzzer_name = match &self.args.selector {
             SelectorKind::Auto => self.fuzzy_finder_runner.detect_available(&self.config)?,
-            SelectorKind::Fzf => "fzf".to_string(),
-            SelectorKind::Fuzzel => "fuzzel".to_string(),
+            SelectorKind::Named(name) => {
+                if self.config.get_selector_profile(name).is_some() {
+                    name.clone()
+                } else {
+                    info!(
+                        "Selector profile `{}` not found; falling back to auto fuzzy detection",
+                        name
+                    );
+                    self.fuzzy_finder_runner.detect_available(&self.config)?
+                }
+            }
         };
 
         self.fuzzy_finder_runner
@@ -381,81 +390,46 @@ impl OpenWith {
                     info!("Auto-opening the only available application");
                     self.execute_application(&applications[0], &target)?;
                 } else {
-                    let (selector_cmd, selector_args) = if let Some(cmd) =
-                        &self.args.selector_command
-                    {
-                        let parts = split(cmd).map_err(|e| {
-                            anyhow::anyhow!("Failed to parse selector command: {e}")
-                        })?;
-                        let (first, rest) = parts
-                            .split_first()
-                            .ok_or_else(|| anyhow::anyhow!("Selector command is empty"))?;
-                        (
-                            first.to_string(),
-                            rest.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                        )
-                    } else {
+                    let (selector_cmd, selector_args) = (|| -> Result<(String, Vec<String>)> {
+                        if let Some(cmd) = &self.args.selector_command {
+                            let parts = split(cmd).map_err(|e| {
+                                anyhow::anyhow!("Failed to parse selector command: {e}")
+                            })?;
+                            let (first, rest) = parts
+                                .split_first()
+                                .ok_or_else(|| anyhow::anyhow!("Selector command is empty"))?;
+                            return Ok((
+                                first.to_string(),
+                                rest.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                            ));
+                        }
+
                         match &self.args.selector {
                             SelectorKind::Auto => {
-                                let mut base = self.config.selector.selector.clone();
-                                if let Some(extra) = &self.config.selector.term_exec_args {
-                                    if !extra.trim().is_empty() {
-                                        base.push(' ');
-                                        base.push_str(extra);
-                                    }
-                                }
-                                let parts = split(&base).map_err(|e| {
-                                    anyhow::anyhow!("Failed to parse selector command: {e}")
-                                })?;
-                                let (first, rest) = parts
-                                    .split_first()
-                                    .ok_or_else(|| anyhow::anyhow!("Selector command is empty"))?;
-                                (
-                                    first.to_string(),
-                                    rest.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                                )
-                            }
-                            SelectorKind::Fzf | SelectorKind::Fuzzel => {
-                                let profile_name = match self.args.selector {
-                                    SelectorKind::Fzf => "fzf",
-                                    SelectorKind::Fuzzel => "fuzzel",
-                                    SelectorKind::Auto => unreachable!(),
-                                };
-
-                                if let Some(profile) =
-                                    self.config.get_selector_profile(profile_name)
-                                {
-                                    let display_name = target.display_name();
-                                    let mut template_engine = TemplateEngine::new();
-                                    template_engine.set("file", display_name.as_ref());
-                                    let prompt = template_engine
-                                        .render(self.config.get_prompt_template(profile));
-                                    let header = template_engine
-                                        .render(self.config.get_header_template(profile));
-                                    template_engine
-                                        .set("prompt", &prompt)
-                                        .set("header", &header);
-                                    let args = template_engine
-                                        .render_args(&profile.args)
-                                        .into_iter()
-                                        .collect::<Vec<_>>();
-                                    (profile.command.clone(), args)
+                                if let Some((cmd, args)) = self.selector_command_from_profile(
+                                    &self.config.selector.selector,
+                                    &target,
+                                    true,
+                                )? {
+                                    Ok((cmd, args))
                                 } else {
-                                    let parts =
-                                        split(&self.config.selector.selector).map_err(|e| {
-                                            anyhow::anyhow!("Failed to parse selector command: {e}")
-                                        })?;
-                                    let (first, rest) = parts.split_first().ok_or_else(|| {
-                                        anyhow::anyhow!("Selector command is empty")
-                                    })?;
-                                    (
-                                        first.to_string(),
-                                        rest.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                                    self.selector_command_from_string(
+                                        &self.config.selector.selector,
+                                        true,
                                     )
                                 }
                             }
+                            SelectorKind::Named(name) => {
+                                if let Some((cmd, args)) =
+                                    self.selector_command_from_profile(name, &target, false)?
+                                {
+                                    Ok((cmd, args))
+                                } else {
+                                    self.selector_command_from_string(name, false)
+                                }
+                            }
                         }
-                    };
+                    })()?;
 
                     let log_command = if selector_args.is_empty() {
                         selector_cmd.clone()
@@ -470,9 +444,19 @@ impl OpenWith {
                         .run(&selector_cmd, &selector_args, &applications)
                     {
                         Ok(Some(index)) => {
+                            if let Some(app) = applications.get(index) {
+                                info!(
+                                    "Selector chose `{}` ({})",
+                                    app.name,
+                                    app.desktop_file.display()
+                                );
+                            }
                             self.execute_application(&applications[index], &target)?;
                         }
-                        Ok(None) => self.launch_with_fuzzy(&applications, &target)?,
+                        Ok(None) => {
+                            info!("Selector produced no choice; falling back to fuzzy finder");
+                            self.launch_with_fuzzy(&applications, &target)?;
+                        }
                         Err(err) => {
                             info!(
                                 "Selector command failed ({}); falling back to fuzzy finder",
@@ -516,6 +500,67 @@ impl OpenWith {
             }
         }
         Ok(())
+    }
+
+    fn selector_command_from_profile(
+        &self,
+        profile_name: &str,
+        target: &LaunchTarget,
+        append_term_args: bool,
+    ) -> Result<Option<(String, Vec<String>)>> {
+        let profile = if let Some(profile) = self.config.get_selector_profile(profile_name) {
+            profile
+        } else {
+            return Ok(None);
+        };
+
+        let display_name = target.display_name();
+        let mut template_engine = TemplateEngine::new();
+        template_engine.set("file", display_name.as_ref());
+        let prompt = template_engine.render(self.config.get_prompt_template(profile));
+        let header = template_engine.render(self.config.get_header_template(profile));
+        template_engine
+            .set("prompt", &prompt)
+            .set("header", &header);
+        let mut args = template_engine.render_args(&profile.args);
+
+        if append_term_args {
+            if let Some(extra) = &self.config.selector.term_exec_args {
+                if !extra.trim().is_empty() {
+                    let extra_parts = split(extra)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse selector exec args: {e}"))?;
+                    args.extend(extra_parts);
+                }
+            }
+        }
+
+        Ok(Some((profile.command.clone(), args)))
+    }
+
+    fn selector_command_from_string(
+        &self,
+        command_spec: &str,
+        append_term_args: bool,
+    ) -> Result<(String, Vec<String>)> {
+        let mut parts = split(command_spec)
+            .map_err(|e| anyhow::anyhow!("Failed to parse selector command: {e}"))?;
+        if parts.is_empty() {
+            anyhow::bail!("Selector command is empty");
+        }
+
+        let command = parts.remove(0);
+
+        if append_term_args {
+            if let Some(extra) = &self.config.selector.term_exec_args {
+                if !extra.trim().is_empty() {
+                    let extra_parts = split(extra)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse selector exec args: {e}"))?;
+                    parts.extend(extra_parts);
+                }
+            }
+        }
+
+        Ok((command, parts))
     }
 }
 

@@ -2,6 +2,7 @@ use crate::application_finder::ApplicationEntry;
 use crate::config::Config;
 use crate::template::TemplateEngine;
 use anyhow::{Context, Result};
+use log::info;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -37,7 +38,9 @@ impl FuzzyFinderRunner {
 
         // Apply template substitutions to args using template engine
         let substituted_args = template_engine.render_args(&profile.args);
+        let mut logged_args = Vec::new();
         for arg in substituted_args {
+            logged_args.push(arg.clone());
             cmd.arg(arg);
         }
 
@@ -47,6 +50,13 @@ impl FuzzyFinderRunner {
         }
 
         cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+
+        let log_command = if logged_args.is_empty() {
+            profile.command.clone()
+        } else {
+            format!("{} {}", profile.command, logged_args.join(" "))
+        };
+        info!("Launching fuzzy finder: {}", log_command);
 
         let mut child = cmd.spawn()?;
         let stdin = child.stdin.as_mut().context("Failed to get stdin")?;
@@ -80,6 +90,11 @@ impl FuzzyFinderRunner {
         let output = child.wait_with_output()?;
 
         if !output.status.success() {
+            info!(
+                "Fuzzy finder `{}` exited with status {:?}",
+                profile.command,
+                output.status.code()
+            );
             return Ok(None);
         }
 
@@ -87,7 +102,23 @@ impl FuzzyFinderRunner {
 
         // Handle fuzzel's index output
         if profile.command == "fuzzel" && profile.args.contains(&"--index".to_string()) {
-            return Ok(selected.parse().ok());
+            let parsed: Option<usize> = selected.parse().ok();
+            if let Some(idx) = parsed {
+                if let Some(app) = applications.get(idx) {
+                    info!(
+                        "Fuzzy finder `{}` selected `{}` ({})",
+                        profile.command,
+                        app.name,
+                        app.desktop_file.display()
+                    );
+                } else {
+                    info!(
+                        "Fuzzy finder `{}` reported selection index {}",
+                        profile.command, idx
+                    );
+                }
+            }
+            return Ok(parsed);
         }
 
         // Generic matching for other fuzzy finders
@@ -115,6 +146,12 @@ impl FuzzyFinderRunner {
             let display = entry_template_engine.render(&profile.entry_template);
 
             if display == selected {
+                info!(
+                    "Fuzzy finder `{}` selected `{}` ({})",
+                    profile.command,
+                    app.name,
+                    app.desktop_file.display()
+                );
                 return Ok(Some(i));
             }
         }

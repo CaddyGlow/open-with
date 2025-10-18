@@ -1,11 +1,30 @@
-use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, Parser, Subcommand};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, ValueEnum, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectorKind {
-    Fzf,
-    Fuzzel,
     Auto,
+    Named(String),
+}
+
+impl SelectorKind {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err("Selector value cannot be empty".to_string());
+        }
+
+        let lower = trimmed.to_ascii_lowercase();
+        if lower == "auto" {
+            Ok(SelectorKind::Auto)
+        } else if lower == "fzf" {
+            Ok(SelectorKind::Named("fzf".to_string()))
+        } else if lower == "fuzzel" {
+            Ok(SelectorKind::Named("fuzzel".to_string()))
+        } else {
+            Ok(SelectorKind::Named(trimmed.to_string()))
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -30,7 +49,7 @@ pub struct OpenArgs {
     pub target: Option<String>,
 
     /// Selector profile to use
-    #[arg(long, value_enum, default_value = "auto", alias = "fuzzer")]
+    #[arg(long, default_value = "auto", value_parser = SelectorKind::parse, alias = "fuzzer")]
     pub selector: SelectorKind,
 
     /// Output JSON instead of interactive mode
@@ -202,6 +221,12 @@ mod tests {
         assert!(cli.command.is_none());
         assert_eq!(cli.open.target.as_deref(), Some("file.txt"));
         assert_eq!(cli.open.selector, SelectorKind::Auto);
+    }
+
+    #[test]
+    fn test_cli_named_selector_profile() {
+        let cli = Cli::try_parse_from(["open-with", "--selector", "rofi", "file.txt"]).unwrap();
+        assert_eq!(cli.open.selector, SelectorKind::Named("rofi".to_string()));
     }
 
     #[test]

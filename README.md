@@ -60,7 +60,7 @@ Arguments:
   [FILE]  File to open (not required when using --build-info or --clear-cache)
 
 Options:
-      --selector <SELECTOR>  Selector profile to use [default: auto] [possible values: fzf, fuzzel, auto]
+      --selector <SELECTOR>  Selector profile to use [default: auto] (profile name, e.g. auto, fzf, fuzzel, rofi)
   -j, --json                 Output JSON instead of interactive mode
   -a, --actions              Show desktop actions as separate entries
       --clear-cache          Clear the desktop file cache
@@ -175,6 +175,11 @@ open-with --generate-config
 This creates `~/.config/open-with/config.toml` with the following structure:
 
 ```toml
+enable_selector = false
+selector = "fzf"            # name of a profile defined in the [selectors.*] tables
+term_exec_args = "-e"
+expand_wildcards = false
+
 [selectors.fzf]
 command = "fzf"
 args = [
@@ -195,7 +200,17 @@ args = [
     "--log-level=info"
 ]
 env = {}
+
+[selectors.rofi]
+command = "rofi"
+args = [
+    "-dmenu",
+    "-p", "{prompt}"
+]
+env = {}
 ```
+
+The `selector` value references the profile name (e.g. `"fzf"`, `"fuzzel"`, or a custom entry) defined under the `[selectors.*]` tables. Override it or use `--selector` on the CLI to switch between profiles without editing command strings directly.
 
 ### Template Variables
 
@@ -205,19 +220,21 @@ The configuration supports template variables in command arguments:
 - `{header}`: Replaced with the application type indicators ("★=Default ▶=XDG Associated  =Available")
 - `{file}`: Replaced with the filename being opened
 
+You can add modifiers to variables; for example `{file|truncate:20}` shortens the displayed file name to 20 characters and appends `...` when truncation occurs.
+
 ### Custom Fuzzy Finders
 
 You can add custom fuzzy finder configurations:
 
 ```toml
-[selectors.rofi]
-command = "rofi"
+[selectors.wofi]
+command = "wofi"
 args = [
     "-dmenu",
     "-p", "{prompt}",
     "-theme", "my-theme"
 ]
-env = { "ROFI_THEME" = "custom.rasi" }
+env = { "WOFI_THEME" = "custom.rasi" }
 ```
 
 ### Environment Variables

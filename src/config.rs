@@ -16,8 +16,8 @@ pub struct SelectorSettings {
 impl Default for SelectorSettings {
     fn default() -> Self {
         Self {
-            enable_selector: true,
-            selector: "rofi -dmenu -i -p 'Open With: '".into(),
+            enable_selector: false,
+            selector: "fzf".into(),
             term_exec_args: Some("-e".into()),
             expand_wildcards: false,
         }
@@ -101,13 +101,32 @@ impl Default for Config {
             },
         );
 
+        selector_profiles.insert(
+            "rofi".to_string(),
+            SelectorProfile {
+                command: "rofi".to_string(),
+                args: vec![
+                    "-dmenu".to_string(),
+                    "-p".to_string(),
+                    "{prompt}".to_string(),
+                ],
+                env: HashMap::new(),
+                entry_template: "{marker}{name}{comment}".to_string(),
+                marker_default: Some("★".to_string()),
+                marker_xdg: Some("▶".to_string()),
+                marker_available: Some("   ".to_string()),
+                prompt_template: None,
+                header_template: None,
+            },
+        );
+
         Self {
             selector: SelectorSettings::default(),
             selector_profiles,
             marker_default: "★ ".to_string(),
             marker_xdg: "▶ ".to_string(),
             marker_available: "  ".to_string(),
-            prompt_template: "Open '{file}' with: ".to_string(),
+            prompt_template: "Open '{file|truncate:20}' with: ".to_string(),
             header_template: "★=Default ▶=XDG Associated  =Available".to_string(),
         }
     }
@@ -218,8 +237,8 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
 
-        assert!(config.selector.enable_selector);
-        assert_eq!(config.selector.selector, "rofi -dmenu -i -p 'Open With: '");
+        assert!(!config.selector.enable_selector);
+        assert_eq!(config.selector.selector, "fzf");
         // Should have default fzf and fuzzel configs
         assert!(config.selector_profiles.contains_key("fzf"));
         assert!(config.selector_profiles.contains_key("fuzzel"));
@@ -267,7 +286,7 @@ mod tests {
             .insert("custom".to_string(), custom_config);
 
         assert!(config.selector_profiles.contains_key("custom"));
-        assert_eq!(config.selector_profiles.len(), 3);
+        assert_eq!(config.selector_profiles.len(), 4);
     }
 
     #[test]

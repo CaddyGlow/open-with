@@ -55,19 +55,20 @@ impl TemplateEngine {
                         i += 1;
                     }
 
-                    if found_closing && self.variables.contains_key(&var_name) {
-                        // Substitute the variable
-                        result.push_str(self.variables.get(&var_name).unwrap());
-                        i += 1; // Skip the closing brace
-                    } else {
-                        // No substitution - copy the original text
-                        for j in start..=i {
-                            if j < chars.len() {
-                                result.push(chars[j]);
+                    if found_closing {
+                        if let Some(rendered) = self.render_variable(&var_name) {
+                            result.push_str(&rendered);
+                            i += 1; // Skip the closing brace
+                        } else {
+                            // No substitution - copy the original text
+                            for j in start..=i {
+                                if j < chars.len() {
+                                    result.push(chars[j]);
+                                }
                             }
-                        }
-                        if found_closing {
-                            i += 1;
+                            if found_closing {
+                                i += 1;
+                            }
                         }
                     }
                 }
@@ -83,6 +84,36 @@ impl TemplateEngine {
     /// Render template arguments by substituting variables in each argument
     pub fn render_args(&self, args: &[String]) -> Vec<String> {
         args.iter().map(|arg| self.render(arg)).collect()
+    }
+
+    fn render_variable(&self, spec: &str) -> Option<String> {
+        let mut parts = spec.split('|');
+        let key = parts.next()?.trim();
+        if key.is_empty() {
+            return None;
+        }
+
+        let mut value = self.variables.get(key)?.clone();
+
+        for modifier in parts {
+            let modifier = modifier.trim();
+            if let Some(arg) = modifier.strip_prefix("truncate:") {
+                if let Ok(limit) = arg.trim().parse::<usize>() {
+                    if limit == 0 {
+                        value.clear();
+                    } else {
+                        let char_count = value.chars().count();
+                        let mut truncated: String = value.chars().take(limit).collect();
+                        if char_count > limit {
+                            truncated.push_str("...");
+                        }
+                        value = truncated;
+                    }
+                }
+            }
+        }
+
+        Some(value)
     }
 
     /// Clear all variables
@@ -320,6 +351,42 @@ mod tests {
         let result = engine.render(&template);
 
         assert_eq!(result, "replacement ".repeat(1000));
+    }
+
+    #[test]
+    fn test_render_truncate_modifier() {
+        let mut engine = TemplateEngine::new();
+        engine.set("file", "averylongfilename.txt");
+
+        let result = engine.render("Open {file|truncate:5}");
+        assert_eq!(result, "Open avery...");
+    }
+
+    #[test]
+    fn test_render_truncate_modifier_zero() {
+        let mut engine = TemplateEngine::new();
+        engine.set("file", "short");
+
+        let result = engine.render("{file|truncate:0}");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_render_unknown_modifier_is_ignored() {
+        let mut engine = TemplateEngine::new();
+        engine.set("file", "document");
+
+        let result = engine.render("{file|unknown:5}");
+        assert_eq!(result, "document");
+    }
+
+    #[test]
+    fn test_render_truncate_modifier_without_cutting() {
+        let mut engine = TemplateEngine::new();
+        engine.set("file", "short");
+
+        let result = engine.render("{file|truncate:10}");
+        assert_eq!(result, "short");
     }
 
     #[test]
