@@ -1,13 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{CommandFactory, Parser};
-use log::{debug, info};
-use shell_words::split;
-use std::env;
+use itertools::Itertools;
 use std::fs;
-use std::io::{self, IsTerminal};
-use std::path::{Path, PathBuf};
-use url::Url;
-use walkdir::WalkDir;
+use std::path::Path;
 
 mod application_finder;
 mod cache;
@@ -17,7 +12,9 @@ mod desktop_parser;
 mod executor;
 mod fuzzy_finder;
 mod mime_associations;
+mod mime_pattern;
 mod mimeapps;
+mod open_it;
 mod regex_handlers;
 mod selector;
 mod target;
@@ -29,639 +26,11 @@ pub mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
 
-use application_finder::{ApplicationEntry, ApplicationFinder};
-use cache::{DesktopCache, FileSystemCache};
-use cli::{Cli, Command, OpenArgs, SelectorKind};
-use desktop_parser::DesktopFile;
-use executor::ApplicationExecutor;
-use fuzzy_finder::FuzzyFinderRunner;
-use itertools::Itertools;
+use application_finder::ApplicationFinder;
+use cli::{Cli, Command, OpenArgs};
 use mime_associations::MimeAssociations;
 use mimeapps::MimeApps;
-use regex_handlers::{RegexHandler, RegexHandlerStore};
-use selector::SelectorRunner;
-use target::LaunchTarget;
-use template::TemplateEngine;
-
-#[derive(Debug)]
-struct OpenIt {
-    application_finder: ApplicationFinder,
-    fuzzy_finder_runner: FuzzyFinderRunner,
-    selector_runner: SelectorRunner,
-    executor: ApplicationExecutor,
-    config: config::Config,
-    regex_handlers: RegexHandlerStore,
-    args: OpenArgs,
-}
-
-impl OpenIt {
-    fn new(args: OpenArgs) -> Result<Self> {
-        if args.clear_cache {
-            Self::clear_cache()?;
-        }
-
-        let desktop_cache = Self::load_desktop_cache();
-        let mime_associations = MimeAssociations::load();
-        let mut config = config::Config::load(args.config.clone()).with_context(|| {
-            args.config
-                .as_ref()
-                .map(|path| format!("Failed to load configuration from {}", path.display()))
-                .unwrap_or_else(|| "Failed to load configuration".to_string())
-        })?;
-
-        if let Some(enable_selector) = args.enable_selector {
-            config.selector.enable_selector = enable_selector;
-        }
-
-        if let Some(term_exec_args) = args.term_exec_args.clone() {
-            config.selector.term_exec_args = if term_exec_args.is_empty() {
-                None
-            } else {
-                Some(term_exec_args)
-            };
-        }
-
-        let application_finder = ApplicationFinder::new(desktop_cache, mime_associations);
-        let fuzzy_finder_runner = FuzzyFinderRunner::new();
-        let selector_runner = SelectorRunner::new();
-        let executor = ApplicationExecutor::with_options(
-            config.app_launch_prefix.clone(),
-            config.selector.term_exec_args.clone(),
-        );
-        let regex_handlers = RegexHandlerStore::load(None)?;
-
-        Ok(Self {
-            application_finder,
-            fuzzy_finder_runner,
-            selector_runner,
-            executor,
-            config,
-            regex_handlers,
-            args,
-        })
-    }
-
-    fn cache_path() -> PathBuf {
-        if let Ok(override_path) = env::var("OPEN_WITH_CACHE_PATH") {
-            return PathBuf::from(override_path);
-        }
-
-        dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join("openit")
-            .join("desktop_cache.json")
-    }
-
-    fn clear_cache() -> Result<()> {
-        let cache_path = Self::cache_path();
-        if cache_path.exists() {
-            match fs::remove_file(&cache_path) {
-                Ok(()) => info!("Cache cleared"),
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    // File was removed between exists() check and remove_file()
-                    info!("No cache to clear");
-                }
-                Err(e) => return Err(e).context("Failed to remove cache file"),
-            }
-        } else {
-            info!("No cache to clear");
-        }
-        Ok(())
-    }
-
-    fn load_desktop_cache() -> Box<dyn DesktopCache> {
-        let cache_path = Self::cache_path();
-        let mut cache = FileSystemCache::new(cache_path);
-
-        // Try to load existing cache
-        if let Err(e) = cache.load() {
-            debug!("Failed to load cache: {e}");
-        }
-
-        let desktop_dirs = xdg::get_desktop_file_paths();
-        let mut cache_updated = false;
-        let rebuild = cache.needs_invalidation() || cache.is_empty();
-
-        if rebuild {
-            debug!("Building desktop file cache");
-            cache.clear();
-            cache_updated |= Self::populate_cache_from_dirs(&mut cache, &desktop_dirs, true);
-        } else {
-            debug!("Loaded desktop cache from disk");
-            cache_updated |= Self::populate_cache_from_dirs(&mut cache, &desktop_dirs, false);
-        }
-
-        if rebuild || cache_updated {
-            if let Err(e) = cache.save() {
-                debug!("Failed to save cache: {e}");
-            }
-        }
-
-        Box::new(cache)
-    }
-
-    fn populate_cache_from_dirs(
-        cache: &mut FileSystemCache,
-        desktop_dirs: &[PathBuf],
-        force: bool,
-    ) -> bool {
-        let mut updated = false;
-
-        for dir in desktop_dirs {
-            if !dir.exists() {
-                debug!("Directory does not exist: {}", dir.display());
-                continue;
-            }
-
-            for entry in WalkDir::new(dir)
-                .follow_links(false)
-                .into_iter()
-                .filter_entry(|e| {
-                    e.file_name()
-                        .to_str()
-                        .map(|s| !s.starts_with('.'))
-                        .unwrap_or(false)
-                })
-                .filter_map(|e| e.ok())
-            {
-                let path = entry.path();
-
-                if !path.is_file() {
-                    continue;
-                }
-
-                if path.extension().and_then(|s| s.to_str()) != Some("desktop") {
-                    continue;
-                }
-
-                let already_cached = if force {
-                    false
-                } else {
-                    DesktopCache::get(&*cache, path).is_some()
-                };
-
-                if already_cached {
-                    continue;
-                }
-
-                match DesktopFile::parse(path) {
-                    Ok(desktop_file) => {
-                        DesktopCache::insert(cache, path.to_path_buf(), desktop_file);
-                        updated = true;
-                    }
-                    Err(e) => {
-                        debug!("Failed to parse {}: {}", path.display(), e);
-                    }
-                }
-            }
-        }
-
-        updated
-    }
-
-    fn resolve_launch_target(raw: &str) -> Result<LaunchTarget> {
-        if let Ok(uri) = Url::parse(raw) {
-            if uri.scheme() == "file" {
-                let path = uri
-                    .to_file_path()
-                    .map_err(|_| anyhow::anyhow!("Invalid file URI: {raw}"))?;
-                let path = path
-                    .canonicalize()
-                    .with_context(|| format!("Failed to resolve file path: {}", path.display()))?;
-                return Ok(LaunchTarget::File(path));
-            }
-            return Ok(LaunchTarget::Uri(uri));
-        }
-
-        let path = PathBuf::from(raw);
-        let path = path
-            .canonicalize()
-            .with_context(|| format!("Failed to resolve file path: {}", path.display()))?;
-        Ok(LaunchTarget::File(path))
-    }
-
-    fn mime_for_target(target: &LaunchTarget) -> String {
-        match target {
-            // TODO:evaluate migration to xdg_mime
-            // SharedMimeInfo::get_mime_type_for_data
-            // SharedMimeInfo::get_mime_types_from_file_filename
-            // or GuessBuilder
-            LaunchTarget::File(path) => mime_guess::from_path(path)
-                .first_or_octet_stream()
-                .to_string(),
-            LaunchTarget::Uri(uri) => format!("x-scheme-handler/{}", uri.scheme()),
-        }
-    }
-
-    fn get_applications_for_mime(&self, mime_type: &str) -> Vec<ApplicationEntry> {
-        self.application_finder
-            .find_for_mime(mime_type, self.args.actions)
-    }
-
-    fn run_fuzzy_finder(
-        &self,
-        applications: &[ApplicationEntry],
-        file_name: &str,
-    ) -> Result<Option<usize>> {
-        let preferred_type = self.preferred_selector_profile_type();
-        let fuzzer_name = match &self.args.selector {
-            SelectorKind::Auto => self
-                .fuzzy_finder_runner
-                .detect_available(&self.config, preferred_type)?,
-            SelectorKind::Named(name) => {
-                if self.config.get_selector_profile(name).is_some() {
-                    name.clone()
-                } else {
-                    info!(
-                        "Selector profile `{}` not found; falling back to auto fuzzy detection",
-                        name
-                    );
-                    self.fuzzy_finder_runner
-                        .detect_available(&self.config, preferred_type)?
-                }
-            }
-        };
-
-        self.fuzzy_finder_runner
-            .run(&self.config, applications, file_name, &fuzzer_name)
-    }
-
-    fn resolve_terminal_launcher(&self) -> Result<Vec<String>> {
-        let mut candidates = self
-            .application_finder
-            .find_for_mime("x-scheme-handler/terminal", false);
-
-        if candidates.is_empty() {
-            candidates = self.application_finder.find_terminal_emulators();
-        }
-
-        if candidates.is_empty() {
-            anyhow::bail!(
-                "No terminal emulator found. Install a terminal or associate one with x-scheme-handler/terminal."
-            );
-        }
-
-        let terminal_app = candidates
-            .iter()
-            .find(|app| !app.requires_terminal)
-            .or_else(|| candidates.first())
-            .ok_or_else(|| anyhow::anyhow!("No suitable terminal emulator found"))?;
-
-        info!(
-            "Using terminal emulator `{}` ({})",
-            terminal_app.name,
-            terminal_app.desktop_file.display()
-        );
-
-        ApplicationExecutor::base_command_parts(&terminal_app.exec).with_context(|| {
-            format!(
-                "Failed to prepare terminal command from `{}`",
-                terminal_app.exec
-            )
-        })
-    }
-
-    fn application_from_regex(handler: &RegexHandler) -> ApplicationEntry {
-        let patterns = handler.patterns().join(", ");
-        let name = handler
-            .notes
-            .clone()
-            .unwrap_or_else(|| format!("Regex handler (prio {})", handler.priority));
-
-        let comment = if patterns.is_empty() {
-            format!("Regex handler -> {}", handler.exec)
-        } else {
-            format!("Regex handler -> {} [{patterns}]", handler.exec)
-        };
-
-        ApplicationEntry {
-            name,
-            exec: handler.exec.clone(),
-            desktop_file: PathBuf::from(format!("regex-handler-{}.desktop", handler.priority)),
-            comment: Some(comment),
-            icon: None,
-            is_xdg: false,
-            xdg_priority: handler.priority,
-            is_default: false,
-            action_id: None,
-            requires_terminal: handler.terminal,
-            is_terminal_emulator: false,
-        }
-    }
-
-    fn execute_application(&self, app: &ApplicationEntry, target: &LaunchTarget) -> Result<()> {
-        if app.requires_terminal {
-            let launcher = self.resolve_terminal_launcher()?;
-            self.executor
-                .execute(app, target, Some(launcher.as_slice()))
-        } else {
-            self.executor.execute(app, target, None)
-        }
-    }
-
-    fn output_json(
-        &self,
-        applications: &[ApplicationEntry],
-        target: &LaunchTarget,
-        mime_type: &str,
-    ) -> Result<()> {
-        // Get XDG associations through the application finder
-        let xdg_associations: Vec<String> = vec![]; // Simplified for now
-
-        let resource = target.as_command_argument().into_owned();
-        let target_kind = match target {
-            LaunchTarget::File(_) => "file",
-            LaunchTarget::Uri(_) => "uri",
-        };
-
-        let output = serde_json::json!({
-            "target": resource,
-            "target_kind": target_kind,
-            "mimetype": mime_type,
-            "xdg_associations": xdg_associations,
-            "applications": applications,
-        });
-
-        println!("{}", serde_json::to_string_pretty(&output)?);
-        Ok(())
-    }
-
-    pub fn run(self) -> Result<()> {
-        // Handle clear-cache early if no file is provided
-        if self.args.clear_cache && self.args.target.is_none() {
-            return Ok(());
-        }
-
-        let raw_target = if let Some(target) = &self.args.target {
-            target
-        } else {
-            return Err(anyhow::anyhow!("No target provided"));
-        };
-
-        let target = Self::resolve_launch_target(raw_target)?;
-
-        if let Some(path) = target.as_path() {
-            if !path.is_file() {
-                return Err(anyhow::anyhow!("Path is not a file: {}", path.display()));
-            }
-
-            info!("File: {}", path.display());
-        } else {
-            info!("URI: {}", target.as_command_argument());
-        }
-
-        let mime_type = Self::mime_for_target(&target);
-        info!("MIME type: {mime_type}");
-
-        let candidate = target.as_command_argument().into_owned();
-        let regex_entry = self.regex_handlers.find_handler(&candidate).map(|handler| {
-            info!(
-                "Matched regex handler (priority {}): {}",
-                handler.priority, handler.exec
-            );
-            if handler.terminal {
-                info!("Regex handler requests terminal execution");
-            }
-            Self::application_from_regex(handler)
-        });
-
-        let mut applications = self.get_applications_for_mime(&mime_type);
-        if let Some(entry) = regex_entry {
-            applications.insert(0, entry);
-        }
-        debug!(
-            "Found {} application(s); regex handler count: {}",
-            applications.len(),
-            self.regex_handlers.len()
-        );
-
-        if !self.config.selector.enable_selector {
-            if let Some(first) = applications.first() {
-                if first
-                    .desktop_file
-                    .to_string_lossy()
-                    .starts_with("regex-handler-")
-                {
-                    info!("Selector disabled; launching regex handler directly");
-                    self.execute_application(first, &target)?;
-                    return Ok(());
-                }
-            }
-        }
-
-        if applications.is_empty() {
-            return Err(anyhow::anyhow!(
-                "No applications found for MIME type: {}",
-                mime_type
-            ));
-        }
-
-        if self.args.json {
-            self.output_json(&applications, &target, &mime_type)?;
-        } else if io::stdout().is_terminal() {
-            if self.config.selector.enable_selector {
-                if applications.len() == 1 && self.args.auto_open_single {
-                    info!("Auto-opening the only available application");
-                    self.execute_application(&applications[0], &target)?;
-                } else {
-                    let (selector_cmd, selector_args) = (|| -> Result<(String, Vec<String>)> {
-                        if let Some(cmd) = &self.args.selector_command {
-                            let parts = split(cmd).map_err(|e| {
-                                anyhow::anyhow!("Failed to parse selector command: {e}")
-                            })?;
-                            let (first, rest) = parts
-                                .split_first()
-                                .ok_or_else(|| anyhow::anyhow!("Selector command is empty"))?;
-                            return Ok((
-                                first.to_string(),
-                                rest.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                            ));
-                        }
-
-                        match &self.args.selector {
-                            SelectorKind::Auto => self.resolve_auto_selector_command(&target, true),
-                            SelectorKind::Named(name) => {
-                                if let Some((cmd, args)) =
-                                    self.selector_command_from_profile(name, &target, false)?
-                                {
-                                    Ok((cmd, args))
-                                } else {
-                                    self.selector_command_from_string(name, false)
-                                }
-                            }
-                        }
-                    })()?;
-
-                    let log_command = if selector_args.is_empty() {
-                        selector_cmd.clone()
-                    } else {
-                        format!("{} {}", selector_cmd, selector_args.join(" "))
-                    };
-
-                    info!("Launching selector: {}", log_command);
-
-                    match self
-                        .selector_runner
-                        .run(&selector_cmd, &selector_args, &applications)
-                    {
-                        Ok(Some(index)) => {
-                            if let Some(app) = applications.get(index) {
-                                info!(
-                                    "Selector chose `{}` ({})",
-                                    app.name,
-                                    app.desktop_file.display()
-                                );
-                            }
-                            self.execute_application(&applications[index], &target)?;
-                        }
-                        Ok(None) => {
-                            info!("Selector produced no choice; falling back to fuzzy finder");
-                            self.launch_with_fuzzy(&applications, &target)?;
-                        }
-                        Err(err) => {
-                            info!(
-                                "Selector command failed ({}); falling back to fuzzy finder",
-                                err
-                            );
-                            self.launch_with_fuzzy(&applications, &target)?;
-                        }
-                    }
-                }
-            } else {
-                self.launch_with_fuzzy(&applications, &target)?;
-            }
-        } else {
-            self.output_json(&applications, &target, &mime_type)?;
-        }
-
-        Ok(())
-    }
-
-    fn launch_with_fuzzy(
-        &self,
-        applications: &[ApplicationEntry],
-        target: &LaunchTarget,
-    ) -> Result<()> {
-        let single_is_regex = applications
-            .first()
-            .map(|app| {
-                app.desktop_file
-                    .to_string_lossy()
-                    .starts_with("regex-handler-")
-            })
-            .unwrap_or(false);
-
-        if applications.len() == 1 && (self.args.auto_open_single || single_is_regex) {
-            info!("Auto-opening the only available application");
-            self.execute_application(&applications[0], target)?;
-        } else {
-            let display_name = target.display_name();
-            if let Some(index) = self.run_fuzzy_finder(applications, display_name.as_ref())? {
-                self.execute_application(&applications[index], target)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn selector_command_from_profile(
-        &self,
-        profile_name: &str,
-        target: &LaunchTarget,
-        append_term_args: bool,
-    ) -> Result<Option<(String, Vec<String>)>> {
-        let profile = if let Some(profile) = self.config.get_selector_profile(profile_name) {
-            profile
-        } else {
-            return Ok(None);
-        };
-
-        let display_name = target.display_name();
-        let mut template_engine = TemplateEngine::new();
-        template_engine.set("file", display_name.as_ref());
-        let prompt = template_engine.render(self.config.get_prompt_template(profile));
-        let header = template_engine.render(self.config.get_header_template(profile));
-        template_engine
-            .set("prompt", &prompt)
-            .set("header", &header);
-        let mut args = template_engine.render_args(&profile.args);
-
-        if append_term_args {
-            if let Some(extra) = &self.config.selector.term_exec_args {
-                if !extra.trim().is_empty() {
-                    let extra_parts = split(extra)
-                        .map_err(|e| anyhow::anyhow!("Failed to parse selector exec args: {e}"))?;
-                    args.extend(extra_parts);
-                }
-            }
-        }
-
-        Ok(Some((profile.command.clone(), args)))
-    }
-
-    fn selector_command_from_string(
-        &self,
-        command_spec: &str,
-        append_term_args: bool,
-    ) -> Result<(String, Vec<String>)> {
-        let mut parts = split(command_spec)
-            .map_err(|e| anyhow::anyhow!("Failed to parse selector command: {e}"))?;
-        if parts.is_empty() {
-            anyhow::bail!("Selector command is empty");
-        }
-
-        let command = parts.remove(0);
-
-        if append_term_args {
-            if let Some(extra) = &self.config.selector.term_exec_args {
-                if !extra.trim().is_empty() {
-                    let extra_parts = split(extra)
-                        .map_err(|e| anyhow::anyhow!("Failed to parse selector exec args: {e}"))?;
-                    parts.extend(extra_parts);
-                }
-            }
-        }
-
-        Ok((command, parts))
-    }
-
-    fn preferred_selector_profile_type(&self) -> config::SelectorProfileType {
-        if io::stdout().is_terminal() {
-            config::SelectorProfileType::Tui
-        } else {
-            config::SelectorProfileType::Gui
-        }
-    }
-
-    fn selector_name_candidates(&self) -> Vec<String> {
-        self.config
-            .selector_candidates(self.preferred_selector_profile_type())
-    }
-
-    fn resolve_auto_selector_command(
-        &self,
-        target: &LaunchTarget,
-        append_term_args: bool,
-    ) -> Result<(String, Vec<String>)> {
-        let candidates = self.selector_name_candidates();
-        let mut last_error: Option<anyhow::Error> = None;
-
-        for name in candidates {
-            match self.selector_command_from_profile(&name, target, append_term_args)? {
-                Some(result) => return Ok(result),
-                None => match self.selector_command_from_string(&name, append_term_args) {
-                    Ok(result) => return Ok(result),
-                    Err(err) => last_error = Some(err),
-                },
-            }
-        }
-
-        if let Some(err) = last_error {
-            Err(err)
-        } else {
-            anyhow::bail!("No selector command configured for auto mode")
-        }
-    }
-}
+use open_it::OpenIt;
 
 fn handle_command(command: Command) -> Result<()> {
     match command {
@@ -993,10 +362,16 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application_finder::ApplicationEntry;
     use crate::cache::{DesktopCache, FileSystemCache};
-    use crate::cli::{EditArgs, RemoveArgs, UnsetArgs};
+    use crate::cli::{EditArgs, RemoveArgs, SelectorKind, UnsetArgs};
     use crate::config::Config;
     use crate::desktop_parser::{DesktopEntry, DesktopFile};
+    use crate::executor::ApplicationExecutor;
+    use crate::fuzzy_finder::FuzzyFinderRunner;
+    use crate::regex_handlers::RegexHandlerStore;
+    use crate::selector::SelectorRunner;
+    use crate::target::LaunchTarget;
     use serial_test::serial;
     use std::collections::HashMap;
     use std::env;
@@ -1397,7 +772,9 @@ Exec=test";
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
         let app = OpenIt::new(args).unwrap();
 
-        let apps = app.get_applications_for_mime("application/unknown");
+        let apps = app
+            .application_finder
+            .find_for_mime("application/unknown", app.args.actions);
         assert!(apps.is_empty());
     }
 
@@ -1448,7 +825,7 @@ Exec=test";
         let target = LaunchTarget::File(PathBuf::from("test.txt"));
 
         // This will print to stdout, but we're mainly testing it doesn't panic
-        let result = app.output_json(&applications, &target, mime_type);
+        let result = app.output_json_for_test(applications, target, mime_type.to_string());
         assert!(result.is_ok());
     }
 
@@ -1866,7 +1243,7 @@ Exec=test";
         let target = LaunchTarget::File(PathBuf::from("test.txt"));
 
         // Test that output_json works correctly
-        let result = app.output_json(&applications, &target, mime_type);
+        let result = app.output_json_for_test(applications, target, mime_type.to_string());
         assert!(result.is_ok());
     }
 

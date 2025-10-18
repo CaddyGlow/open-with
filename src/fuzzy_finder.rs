@@ -1,5 +1,5 @@
 use crate::application_finder::ApplicationEntry;
-use crate::config::{Config, SelectorProfileType};
+use crate::config::{Config, SelectorProfileId, SelectorProfileType};
 use crate::template::TemplateEngine;
 use anyhow::{Context, Result};
 use log::info;
@@ -19,11 +19,13 @@ impl FuzzyFinderRunner {
         config: &Config,
         applications: &[ApplicationEntry],
         file_name: &str,
-        fuzzer_name: &str,
+        profile_id: &SelectorProfileId,
     ) -> Result<Option<usize>> {
-        let profile = config.get_selector_profile(fuzzer_name).ok_or_else(|| {
-            anyhow::anyhow!("No configuration found for fuzzy finder: {}", fuzzer_name)
-        })?;
+        let profile = config
+            .get_selector_profile(profile_id.as_ref())
+            .ok_or_else(|| {
+                anyhow::anyhow!("No configuration found for fuzzy finder: {}", profile_id)
+            })?;
 
         // Create template engine for substitutions
         let mut template_engine = TemplateEngine::new();
@@ -163,12 +165,12 @@ impl FuzzyFinderRunner {
         &self,
         config: &Config,
         preferred_type: SelectorProfileType,
-    ) -> Result<String> {
+    ) -> Result<SelectorProfileId> {
         let candidates = config.selector_candidates(preferred_type);
 
-        for name in candidates {
-            if Self::candidate_available(config, &name) {
-                return Ok(name);
+        for id in candidates {
+            if Self::candidate_available(config, &id) {
+                return Ok(id);
             }
         }
 
@@ -177,11 +179,11 @@ impl FuzzyFinderRunner {
         ))
     }
 
-    fn candidate_available(config: &Config, name: &str) -> bool {
-        if let Some(profile) = config.get_selector_profile(name) {
+    fn candidate_available(config: &Config, id: &SelectorProfileId) -> bool {
+        if let Some(profile) = config.get_selector_profile(id.as_ref()) {
             which::which(&profile.command).is_ok()
         } else {
-            which::which(name).is_ok()
+            which::which(id.as_str()).is_ok()
         }
     }
 }
@@ -190,7 +192,7 @@ impl FuzzyFinderRunner {
 mod tests {
     use super::*;
     use crate::application_finder::ApplicationEntry;
-    use crate::config::SelectorProfile;
+    use crate::config::{SelectorProfile, SelectorProfileId};
     use std::path::PathBuf;
 
     fn create_test_application() -> ApplicationEntry {
@@ -224,20 +226,20 @@ mod tests {
         let mut config = Config::default();
         config.selector_profiles.clear();
         config.selector_profiles.insert(
-            "sh".to_string(),
+            SelectorProfileId::from("sh"),
             SelectorProfile {
                 command: "sh".to_string(),
                 selector_type: SelectorProfileType::Tui,
                 ..SelectorProfile::default()
             },
         );
-        config.selector.defaults.tui = "sh".to_string();
-        config.selector.defaults.gui = "missing-gui".to_string();
+        config.selector.defaults.tui = SelectorProfileId::from("sh");
+        config.selector.defaults.gui = SelectorProfileId::from("missing-gui");
 
         let runner = FuzzyFinderRunner::new();
         let result = runner.detect_available(&config, SelectorProfileType::Tui);
 
-        assert_eq!(result.unwrap(), "sh");
+        assert_eq!(result.unwrap().as_str(), "sh");
     }
 
     #[test]
@@ -245,20 +247,20 @@ mod tests {
         let mut config = Config::default();
         config.selector_profiles.clear();
         config.selector_profiles.insert(
-            "sh".to_string(),
+            SelectorProfileId::from("sh"),
             SelectorProfile {
                 command: "sh".to_string(),
                 selector_type: SelectorProfileType::Gui,
                 ..SelectorProfile::default()
             },
         );
-        config.selector.defaults.tui = "missing-tui".to_string();
-        config.selector.defaults.gui = "sh".to_string();
+        config.selector.defaults.tui = SelectorProfileId::from("missing-tui");
+        config.selector.defaults.gui = SelectorProfileId::from("sh");
 
         let runner = FuzzyFinderRunner::new();
         let result = runner.detect_available(&config, SelectorProfileType::Tui);
 
-        assert_eq!(result.unwrap(), "sh");
+        assert_eq!(result.unwrap().as_str(), "sh");
     }
 
     #[test]
@@ -267,7 +269,8 @@ mod tests {
         let runner = FuzzyFinderRunner::new();
         let applications = [create_test_application()];
 
-        let result = runner.run(&config, &applications, "test.txt", "nonexistent");
+        let invalid_id = SelectorProfileId::from("nonexistent");
+        let result = runner.run(&config, &applications, "test.txt", &invalid_id);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()

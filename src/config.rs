@@ -1,8 +1,63 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SelectorProfileId(String);
+
+impl SelectorProfileId {
+    pub fn new<S: Into<String>>(value: S) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for SelectorProfileId {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for SelectorProfileId {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl fmt::Display for SelectorProfileId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Deref for SelectorProfileId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for SelectorProfileId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Borrow<str> for SelectorProfileId {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -15,15 +70,15 @@ pub enum SelectorProfileType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SelectorDefaults {
-    pub gui: String,
-    pub tui: String,
+    pub gui: SelectorProfileId,
+    pub tui: SelectorProfileId,
 }
 
 impl Default for SelectorDefaults {
     fn default() -> Self {
         Self {
-            gui: "fuzzel".into(),
-            tui: "fzf".into(),
+            gui: SelectorProfileId::from("fuzzel"),
+            tui: SelectorProfileId::from("fzf"),
         }
     }
 }
@@ -50,7 +105,7 @@ impl Default for SelectorSettings {
 }
 
 impl SelectorSettings {
-    pub fn default_for(&self, profile_type: SelectorProfileType) -> &str {
+    pub fn default_for(&self, profile_type: SelectorProfileType) -> &SelectorProfileId {
         match profile_type {
             SelectorProfileType::Gui => &self.defaults.gui,
             SelectorProfileType::Tui => &self.defaults.tui,
@@ -79,7 +134,7 @@ pub struct Config {
     #[serde(flatten)]
     pub selector: SelectorSettings,
     #[serde(rename = "selectors")]
-    pub selector_profiles: HashMap<String, SelectorProfile>,
+    pub selector_profiles: HashMap<SelectorProfileId, SelectorProfile>,
     pub marker_default: String,
     pub marker_xdg: String,
     pub marker_available: String,
@@ -95,7 +150,7 @@ impl Default for Config {
 
         // Default fzf configuration
         selector_profiles.insert(
-            "fzf".to_string(),
+            SelectorProfileId::from("fzf"),
             SelectorProfile {
                 command: "fzf".to_string(),
                 args: vec![
@@ -119,7 +174,7 @@ impl Default for Config {
 
         // Default fuzzel configuration
         selector_profiles.insert(
-            "fuzzel".to_string(),
+            SelectorProfileId::from("fuzzel"),
             SelectorProfile {
                 command: "fuzzel".to_string(),
                 args: vec![
@@ -141,7 +196,7 @@ impl Default for Config {
         );
 
         selector_profiles.insert(
-            "rofi".to_string(),
+            SelectorProfileId::from("rofi"),
             SelectorProfile {
                 command: "rofi".to_string(),
                 args: vec![
@@ -232,7 +287,7 @@ impl Config {
         self.selector_profiles.get(name)
     }
 
-    pub fn selector_candidates(&self, preferred: SelectorProfileType) -> Vec<String> {
+    pub fn selector_candidates(&self, preferred: SelectorProfileType) -> Vec<SelectorProfileId> {
         let type_order = match preferred {
             SelectorProfileType::Gui => [SelectorProfileType::Gui, SelectorProfileType::Tui],
             SelectorProfileType::Tui => [SelectorProfileType::Tui, SelectorProfileType::Gui],
@@ -241,14 +296,16 @@ impl Config {
         let mut candidates = Vec::new();
 
         for ty in type_order {
-            let default_name = self.selector.default_for(ty).trim();
-            if !default_name.is_empty()
-                && !candidates.iter().any(|existing| existing == default_name)
-            {
-                candidates.push(default_name.to_string());
+            let default_name = self.selector.default_for(ty);
+            let trimmed = default_name.as_str().trim();
+            if !trimmed.is_empty() {
+                let candidate = SelectorProfileId::from(trimmed);
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
+                }
             }
 
-            let mut names: Vec<String> = self
+            let mut names: Vec<SelectorProfileId> = self
                 .selector_profiles
                 .iter()
                 .filter_map(|(name, profile)| {
@@ -268,7 +325,7 @@ impl Config {
             }
         }
 
-        let mut remaining: Vec<String> = self
+        let mut remaining: Vec<SelectorProfileId> = self
             .selector_profiles
             .keys()
             .filter(|name| !candidates.contains(*name))
@@ -328,8 +385,8 @@ mod tests {
         let config = Config::default();
 
         assert!(!config.selector.enable_selector);
-        assert_eq!(config.selector.defaults.gui, "fuzzel");
-        assert_eq!(config.selector.defaults.tui, "fzf");
+        assert_eq!(config.selector.defaults.gui.as_str(), "fuzzel");
+        assert_eq!(config.selector.defaults.tui.as_str(), "fzf");
         // Should have default fzf and fuzzel configs
         assert!(config.selector_profiles.contains_key("fzf"));
         assert!(config.selector_profiles.contains_key("fuzzel"));
@@ -387,7 +444,7 @@ mod tests {
         // Test adding directly to the HashMap
         config
             .selector_profiles
-            .insert("custom".to_string(), custom_config);
+            .insert(SelectorProfileId::from("custom"), custom_config);
 
         assert!(config.selector_profiles.contains_key("custom"));
         assert_eq!(config.selector_profiles.len(), 4);
@@ -398,12 +455,12 @@ mod tests {
         let config = Config::default();
 
         let gui_candidates = config.selector_candidates(SelectorProfileType::Gui);
-        assert_eq!(gui_candidates.first().unwrap(), "fuzzel");
-        assert!(gui_candidates.iter().any(|name| name == "fzf"));
+        assert_eq!(gui_candidates.first().unwrap().as_str(), "fuzzel");
+        assert!(gui_candidates.iter().any(|name| name.as_str() == "fzf"));
 
         let tui_candidates = config.selector_candidates(SelectorProfileType::Tui);
-        assert_eq!(tui_candidates.first().unwrap(), "fzf");
-        assert!(tui_candidates.iter().any(|name| name == "fuzzel"));
+        assert_eq!(tui_candidates.first().unwrap().as_str(), "fzf");
+        assert!(tui_candidates.iter().any(|name| name.as_str() == "fuzzel"));
     }
 
     #[test]

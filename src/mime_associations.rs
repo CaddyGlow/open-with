@@ -1,6 +1,6 @@
+use crate::mime_pattern;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use wildmatch::WildMatch;
 
 #[derive(Debug, Default)]
 pub struct MimeAssociations {
@@ -90,7 +90,7 @@ impl MimeAssociations {
                 continue;
             }
 
-            if mime_pattern_matches(pattern, mime_type) {
+            if mime_pattern::matches(pattern, mime_type) {
                 for handler in handlers {
                     if seen.insert(handler.clone()) {
                         results.push(handler.clone());
@@ -101,36 +101,6 @@ impl MimeAssociations {
 
         results
     }
-}
-
-fn mime_pattern_matches(pattern: &str, target: &str) -> bool {
-    if pattern.eq_ignore_ascii_case(target) {
-        return true;
-    }
-
-    let pattern = pattern.trim();
-    let target = target.trim();
-
-    if pattern.is_empty() || target.is_empty() {
-        return false;
-    }
-
-    let pattern_norm = pattern.to_ascii_lowercase();
-    let target_norm = target.to_ascii_lowercase();
-
-    if pattern_norm == target_norm {
-        return true;
-    }
-
-    if !pattern_norm.contains('/') || !target_norm.contains('/') {
-        return false;
-    }
-
-    if pattern_norm.contains('*') || pattern_norm.contains('?') {
-        return WildMatch::new(&pattern_norm).matches(&target_norm);
-    }
-
-    pattern_norm == target_norm
 }
 
 #[cfg(test)]

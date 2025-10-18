@@ -28,7 +28,7 @@ impl SelectorRunner {
             return Err(anyhow::anyhow!("Selector command is empty"));
         }
 
-        let mut cmd = Command::new(command);
+        let mut cmd = Command::new(command_spec);
         for arg in args {
             cmd.arg(arg);
         }
@@ -37,34 +37,38 @@ impl SelectorRunner {
 
         let mut child = cmd
             .spawn()
-            .with_context(|| format!("Failed to spawn selector command `{}`", command))?;
+            .with_context(|| format!("Failed to spawn selector command `{}`", command_spec))?;
 
         let mut stdin = child
             .stdin
             .take()
-            .ok_or_else(|| anyhow::anyhow!("Selector command `{}` has no stdin", command))?;
+            .ok_or_else(|| anyhow::anyhow!("Selector command `{}` has no stdin", command_spec))?;
 
         for app in applications {
-            let marker = marker_for_app(app);
-            writeln!(stdin, "{marker} {}", app.name)?;
+            writeln!(stdin, "{}", format_entry(app))?;
         }
 
         let output = child
             .wait_with_output()
-            .context("Failed to read selector output")?;
+            .with_context(|| format!("Failed to read selector output from `{}`", command_spec))?;
 
         if !output.status.success() {
             info!(
                 "Selector command `{}` exited with status {:?}",
-                command,
+                command_spec,
                 output.status.code()
             );
+            if let Ok(stderr) = String::from_utf8(output.stderr.clone()) {
+                if !stderr.trim().is_empty() {
+                    info!("Selector stderr: {}", stderr.trim());
+                }
+            }
             return Ok(None);
         }
 
         let selection = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if selection.is_empty() {
-            info!("Selector command `{}` returned no selection", command);
+            info!("Selector command `{}` returned no selection", command_spec);
             return Ok(None);
         }
 
@@ -94,6 +98,10 @@ fn marker_for_app(app: &ApplicationEntry) -> &'static str {
     } else {
         "[available]"
     }
+}
+
+fn format_entry(app: &ApplicationEntry) -> String {
+    format!("{} {}", marker_for_app(app), app.name)
 }
 
 fn strip_marker(selection: &str) -> String {

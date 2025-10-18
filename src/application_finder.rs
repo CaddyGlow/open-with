@@ -1,11 +1,11 @@
 use crate::cache::DesktopCache;
 use crate::desktop_parser::DesktopFile;
 use crate::mime_associations::MimeAssociations;
+use crate::mime_pattern;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::path::PathBuf;
-use wildmatch::WildMatch;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplicationEntry {
@@ -20,6 +20,13 @@ pub struct ApplicationEntry {
     pub action_id: Option<String>,
     pub requires_terminal: bool,
     pub is_terminal_emulator: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplicationSource {
+    Available,
+    Xdg { priority: i32, is_default: bool },
+    Regex { priority: i32 },
 }
 
 impl ApplicationEntry {
@@ -69,49 +76,29 @@ impl ApplicationEntry {
         }
     }
 
-    pub fn with_xdg(mut self, priority: i32, is_default: bool) -> Self {
-        self.is_xdg = true;
-        self.xdg_priority = priority;
-        self.is_default = is_default;
+    pub fn with_source(mut self, source: ApplicationSource) -> Self {
+        match source {
+            ApplicationSource::Available => {
+                self.is_xdg = false;
+                self.xdg_priority = -1;
+                self.is_default = false;
+            }
+            ApplicationSource::Xdg {
+                priority,
+                is_default,
+            } => {
+                self.is_xdg = true;
+                self.xdg_priority = priority;
+                self.is_default = is_default;
+            }
+            ApplicationSource::Regex { priority } => {
+                self.is_xdg = false;
+                self.xdg_priority = priority;
+                self.is_default = false;
+            }
+        }
         self
     }
-
-    pub fn into_available(mut self) -> Self {
-        self.is_xdg = false;
-        self.xdg_priority = -1;
-        self.is_default = false;
-        self
-    }
-}
-
-fn mime_type_matches(pattern: &str, target: &str) -> bool {
-    if pattern.eq_ignore_ascii_case(target) {
-        return true;
-    }
-
-    let pattern = pattern.trim();
-    let target = target.trim();
-
-    if pattern.is_empty() || target.is_empty() {
-        return false;
-    }
-
-    let pattern_norm = pattern.to_ascii_lowercase();
-    let target_norm = target.to_ascii_lowercase();
-
-    if pattern_norm == target_norm {
-        return true;
-    }
-
-    if !pattern_norm.contains('/') || !target_norm.contains('/') {
-        return false;
-    }
-
-    if pattern_norm.contains('*') || pattern_norm.contains('?') {
-        return WildMatch::new(&pattern_norm).matches(&target_norm);
-    }
-
-    pattern_norm == target_norm
 }
 
 pub struct ApplicationFinder {
@@ -152,7 +139,10 @@ impl ApplicationFinder {
                         let is_default = priority == 0;
 
                         let app_entry = ApplicationEntry::from_desktop_entry(entry, path.clone())
-                            .with_xdg(priority_i32, is_default);
+                            .with_source(ApplicationSource::Xdg {
+                                priority: priority_i32,
+                                is_default,
+                            });
                         applications.push(app_entry);
 
                         if include_actions {
@@ -163,7 +153,12 @@ impl ApplicationFinder {
                                     action,
                                     path.clone(),
                                 )
-                                .with_xdg(priority_i32, false);
+                                .with_source(
+                                    ApplicationSource::Xdg {
+                                        priority: priority_i32,
+                                        is_default: false,
+                                    },
+                                );
                                 applications.push(action_app);
                             }
                         }
@@ -178,7 +173,7 @@ impl ApplicationFinder {
                 if entry
                     .mime_types
                     .iter()
-                    .any(|pattern| mime_type_matches(pattern, mime_type))
+                    .any(|pattern| mime_pattern::matches(pattern, mime_type))
                 {
                     let desktop_id = path
                         .file_name()
@@ -188,7 +183,7 @@ impl ApplicationFinder {
 
                     if seen.insert(desktop_id) {
                         let app = ApplicationEntry::from_desktop_entry(entry, path.clone())
-                            .into_available();
+                            .with_source(ApplicationSource::Available);
                         applications.push(app);
 
                         if include_actions {
@@ -199,7 +194,7 @@ impl ApplicationFinder {
                                     action,
                                     path.clone(),
                                 )
-                                .into_available();
+                                .with_source(ApplicationSource::Available);
                                 applications.push(action_app);
                             }
                         }
@@ -230,7 +225,7 @@ impl ApplicationFinder {
 
                     if seen.insert(desktop_id) {
                         let app = ApplicationEntry::from_desktop_entry(entry, path.clone())
-                            .into_available();
+                            .with_source(ApplicationSource::Available);
                         emulators.push(app);
                     }
                 }
@@ -292,11 +287,11 @@ mod tests {
 
     #[test]
     fn test_mime_type_matches_exact_and_wildcard() {
-        assert!(super::mime_type_matches("image/jpeg", "image/jpeg"));
-        assert!(super::mime_type_matches("image/*", "image/png"));
-        assert!(super::mime_type_matches("text/*", "text/plain"));
-        assert!(!super::mime_type_matches("text/*", "image/png"));
-        assert!(super::mime_type_matches(
+        assert!(crate::mime_pattern::matches("image/jpeg", "image/jpeg"));
+        assert!(crate::mime_pattern::matches("image/*", "image/png"));
+        assert!(crate::mime_pattern::matches("text/*", "text/plain"));
+        assert!(!crate::mime_pattern::matches("text/*", "image/png"));
+        assert!(crate::mime_pattern::matches(
             "APPLICATION/JSON",
             "application/json"
         ));
@@ -660,7 +655,12 @@ mod tests {
         let entry = create_test_desktop_entry("XDGApp", vec!["text/plain"]);
         let path = PathBuf::from("/usr/share/applications/xdgapp.desktop");
 
-        let app = ApplicationEntry::from_desktop_entry(&entry, path).with_xdg(2, false);
+        let app = ApplicationEntry::from_desktop_entry(&entry, path).with_source(
+            ApplicationSource::Xdg {
+                priority: 2,
+                is_default: false,
+            },
+        );
 
         assert!(app.is_xdg);
         assert!(!app.is_default);
@@ -672,7 +672,12 @@ mod tests {
         let entry = create_test_desktop_entry("DefaultApp", vec!["text/plain"]);
         let path = PathBuf::from("/usr/share/applications/defaultapp.desktop");
 
-        let app = ApplicationEntry::from_desktop_entry(&entry, path).with_xdg(0, true);
+        let app = ApplicationEntry::from_desktop_entry(&entry, path).with_source(
+            ApplicationSource::Xdg {
+                priority: 0,
+                is_default: true,
+            },
+        );
 
         assert!(app.is_xdg);
         assert!(app.is_default);
@@ -685,8 +690,11 @@ mod tests {
         let path = PathBuf::from("/usr/share/applications/resetapp.desktop");
 
         let app = ApplicationEntry::from_desktop_entry(&entry, path)
-            .with_xdg(3, true)
-            .into_available();
+            .with_source(ApplicationSource::Xdg {
+                priority: 3,
+                is_default: true,
+            })
+            .with_source(ApplicationSource::Available);
 
         assert!(!app.is_xdg);
         assert!(!app.is_default);
