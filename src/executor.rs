@@ -6,19 +6,61 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
 #[derive(Debug)]
-pub struct ApplicationExecutor;
+pub struct ApplicationExecutor {
+    app_launch_prefix: Option<String>,
+    terminal_exec_args: Option<String>,
+}
 
 impl ApplicationExecutor {
     pub fn new() -> Self {
-        Self
+        Self {
+            app_launch_prefix: None,
+            terminal_exec_args: None,
+        }
     }
 
-    pub fn execute(&self, app: &ApplicationEntry, target: &LaunchTarget) -> Result<()> {
-        let prepared_command = Self::prepare_command(&app.exec, target)?;
+    pub fn with_options(
+        app_launch_prefix: Option<String>,
+        terminal_exec_args: Option<String>,
+    ) -> Self {
+        let normalized_prefix = app_launch_prefix.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+
+        Self {
+            app_launch_prefix: normalized_prefix,
+            terminal_exec_args,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_launch_prefix(prefix: Option<String>) -> Self {
+        Self::with_options(prefix, None)
+    }
+
+    pub fn execute(
+        &self,
+        app: &ApplicationEntry,
+        target: &LaunchTarget,
+        terminal_launcher: Option<&[String]>,
+    ) -> Result<()> {
+        let prepared_command =
+            self.build_command(app, target, terminal_launcher.map(|parts| parts.to_vec()))?;
         Self::spawn_detached(prepared_command, target)
     }
 
     pub fn prepare_command(exec: &str, target: &LaunchTarget) -> Result<Vec<String>> {
+        let mut parts = Self::base_command_parts(exec)?;
+        parts.push(target.as_command_argument().into_owned());
+        Ok(parts)
+    }
+
+    pub fn base_command_parts(exec: &str) -> Result<Vec<String>> {
         let raw_parts = shell_words::split(exec)
             .map_err(|e| anyhow::anyhow!("Failed to parse exec command: {e}"))?;
 
@@ -29,7 +71,7 @@ impl ApplicationExecutor {
                 cleaned = cleaned.replace(placeholder, "");
             }
 
-            if cleaned.is_empty() {
+            if cleaned.trim().is_empty() {
                 continue;
             }
 
@@ -37,13 +79,53 @@ impl ApplicationExecutor {
         }
 
         if parts.is_empty() {
-            return Err(anyhow::anyhow!("Empty exec command"));
+            Err(anyhow::anyhow!("Empty exec command"))
+        } else {
+            Ok(parts)
+        }
+    }
+
+    fn build_command(
+        &self,
+        app: &ApplicationEntry,
+        target: &LaunchTarget,
+        terminal_launcher: Option<Vec<String>>,
+    ) -> Result<Vec<String>> {
+        let mut command_parts = Self::prepare_command(&app.exec, target)?;
+
+        if let Some(mut launcher_parts) = terminal_launcher {
+            if let Some(args) = &self.terminal_exec_args {
+                if !args.is_empty() {
+                    let exec_args = shell_words::split(args).map_err(|e| {
+                        anyhow::anyhow!("Failed to parse terminal exec args `{}`: {e}", args)
+                    })?;
+
+                    launcher_parts.extend(exec_args);
+                }
+            }
+
+            launcher_parts.extend(command_parts);
+            command_parts = launcher_parts;
         }
 
-        // Add the file path as the last argument
-        parts.push(target.as_command_argument().into_owned());
+        if let Some(prefix) = &self.app_launch_prefix {
+            let mut prefix_parts = shell_words::split(prefix).map_err(|e| {
+                anyhow::anyhow!("Failed to parse app launch prefix `{}`: {e}", prefix)
+            })?;
 
-        Ok(parts)
+            if prefix_parts.is_empty() {
+                anyhow::bail!("App launch prefix produced no command parts");
+            }
+
+            prefix_parts.append(&mut command_parts);
+            command_parts = prefix_parts;
+        }
+
+        if command_parts.is_empty() {
+            anyhow::bail!("Empty command after applying launch prefix");
+        }
+
+        Ok(command_parts)
     }
 
     fn spawn_detached(command_parts: Vec<String>, target: &LaunchTarget) -> Result<()> {
@@ -105,6 +187,8 @@ mod tests {
             xdg_priority: -1,
             is_default: false,
             action_id: None,
+            requires_terminal: false,
+            is_terminal_emulator: false,
         }
     }
 
@@ -214,7 +298,7 @@ mod tests {
         let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
 
         let executor = ApplicationExecutor::new();
-        let result = executor.execute(&app, &target);
+        let result = executor.execute(&app, &target, None);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Empty exec command");
     }
@@ -286,6 +370,82 @@ mod tests {
                 "--page=1",
                 "/home/user/document.pdf"
             ]
+        );
+    }
+
+    #[test]
+    fn test_build_command_with_launch_prefix() {
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let executor = ApplicationExecutor::with_launch_prefix(Some("flatpak run".into()));
+
+        let app = create_test_application("code %f");
+        let result = executor.build_command(&app, &target, None).unwrap();
+
+        assert_eq!(
+            result,
+            vec!["flatpak", "run", "code", "/home/user/test.txt"]
+        );
+    }
+
+    #[test]
+    fn test_build_command_ignores_empty_prefix() {
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let executor = ApplicationExecutor::with_launch_prefix(Some("   ".into()));
+
+        let app = create_test_application("app %f");
+        let result = executor.build_command(&app, &target, None).unwrap();
+
+        assert_eq!(result, vec!["app", "/home/user/test.txt"]);
+    }
+
+    #[test]
+    fn test_build_command_invalid_prefix_errors() {
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let executor = ApplicationExecutor::with_launch_prefix(Some("\"unterminated".into()));
+
+        let app = create_test_application("app %f");
+        let result = executor.build_command(&app, &target, None);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to parse app launch prefix"));
+    }
+
+    #[test]
+    fn test_build_command_with_terminal_launcher_and_args() {
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let executor = ApplicationExecutor::with_options(None, Some("-e".into()));
+
+        let mut app = create_test_application("code %f");
+        app.requires_terminal = true;
+
+        let terminal_launcher = vec!["foot".to_string()];
+
+        let result = executor
+            .build_command(&app, &target, Some(terminal_launcher))
+            .unwrap();
+
+        assert_eq!(result, vec!["foot", "-e", "code", "/home/user/test.txt"]);
+    }
+
+    #[test]
+    fn test_build_command_with_terminal_launcher_no_args() {
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let executor = ApplicationExecutor::with_options(None, Some(String::new()));
+
+        let mut app = create_test_application("nvim %f");
+        app.requires_terminal = true;
+
+        let terminal_launcher = vec!["kitty".to_string(), "--single-instance".to_string()];
+
+        let result = executor
+            .build_command(&app, &target, Some(terminal_launcher))
+            .unwrap();
+
+        assert_eq!(
+            result,
+            vec!["kitty", "--single-instance", "nvim", "/home/user/test.txt"]
         );
     }
 }

@@ -31,3 +31,5 @@ devenv.local.nix
 tarpaulin-report.json
 cobertura.xml
 tarpaulin-report.html
+
+*bak

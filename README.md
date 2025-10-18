@@ -1,8 +1,8 @@
-# open-with
+# openit
 
-[![CI](https://github.com/CaddyGlow/open-with/workflows/CI/badge.svg)](https://github.com/CaddyGlow/open-with/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/CaddyGlow/open-with/branch/main/graph/badge.svg)](https://codecov.io/gh/CaddyGlow/open-with)
-[![Crates.io](https://img.shields.io/crates/v/open-with.svg)](https://crates.io/crates/open-with)
+[![CI](https://github.com/CaddyGlow/openit/workflows/CI/badge.svg)](https://github.com/CaddyGlow/openit/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/CaddyGlow/openit/branch/main/graph/badge.svg)](https://codecov.io/gh/CaddyGlow/openit)
+[![Crates.io](https://img.shields.io/crates/v/openit.svg)](https://crates.io/crates/openit)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A modern command-line file opener for Linux that respects XDG MIME associations and provides an interactive fuzzy-finder interface for selecting applications.
@@ -22,15 +22,15 @@ A modern command-line file opener for Linux that respects XDG MIME associations 
 ### From Source
 
 ```bash
-git clone https://github.com/CaddyGlow/open-with.git
-cd open-with
+git clone https://github.com/CaddyGlow/openit.git
+cd openit
 cargo install --path .
 ```
 
 ### From crates.io
 
 ```bash
-cargo install open-with
+cargo install openit
 ```
 
 ## Usage
@@ -39,22 +39,22 @@ cargo install open-with
 
 ```bash
 # Open a file with interactive application selection
-open-with document.pdf
+openit document.pdf
 
 # Output available applications as JSON
-open-with document.pdf --json
+openit document.pdf --json
 
 # Show desktop actions as separate entries
-open-with image.png --actions
+openit image.png --actions
 
 # Use a specific fuzzy finder
-open-with file.txt --selector fzf
+openit file.txt --selector fzf
 ```
 
 ### Options
 
 ```
-Usage: open-with [OPTIONS] [FILE]
+Usage: openit [OPTIONS] [FILE]
 
 Arguments:
   [FILE]  File to open (not required when using --build-info or --clear-cache)
@@ -77,13 +77,13 @@ Options:
 
 #### Interactive Mode
 ```bash
-open-with document.pdf
+openit document.pdf
 ```
 Opens an interactive fuzzy finder showing all applications that can handle PDF files.
 
 #### JSON Output
 ```bash
-open-with document.pdf --json | jq .
+openit document.pdf --json | jq .
 ```
 ```json
 {
@@ -108,39 +108,45 @@ open-with document.pdf --json | jq .
 
 #### With Desktop Actions
 ```bash
-open-with image.png --actions
+openit image.png --actions
 ```
 Shows both the main application entries and their available actions (edit, print, etc.).
 
 #### Generate Configuration
 ```bash
-open-with --generate-config
+openit --generate-config
 ```
-Creates a default configuration file at `~/.config/open-with/config.toml` with customizable fuzzy finder settings.
+Creates a default configuration file at `~/.config/openit/config.toml` with customizable fuzzy finder settings.
+
+#### Generate Shell Completions
+```bash
+openit completions bash --output ~/.local/share/bash-completion/openit
+```
+Generates a completion script for the specified shell. Omitting `--output` prints the script to stdout. Dynamic completions are also available via `COMPLETE=<shell> openit` for shells that support clap's auto-completion protocol.
 
 ### Manage MIME Associations
 
-`open-with` now exposes subcommands to edit the user `mimeapps.list` directly:
+`openit` now exposes subcommands to edit the user `mimeapps.list` directly:
 
 ```bash
 # Set (overwrite) the default handler for a MIME type or extension
-open-with set text/plain helix.desktop
+openit set text/plain helix.desktop
 
 # Add a secondary handler without replacing the default entry
-open-with add text/plain code.desktop
+openit add text/plain code.desktop
 
 # Remove a specific handler
-open-with remove text/plain code.desktop
+openit remove text/plain code.desktop
 
 # Remove all handlers for a MIME type
-open-with unset text/plain
+openit unset text/plain
 
 # Inspect configured handlers
-open-with list
-open-with list --json | jq
+openit list
+openit list --json | jq
 ```
 
-File extensions are automatically converted to their corresponding MIME types (e.g., `open-with set .md helix.desktop`).
+File extensions are automatically converted to their corresponding MIME types (e.g., `openit set .md helix.desktop`).
 
 ## Dependencies
 
@@ -160,8 +166,8 @@ The application reads standard XDG directories and files:
 
 The application follows XDG Base Directory specifications:
 
-- **Cache**: `~/.cache/open-with/desktop_cache.json`
-- **Config**: `~/.config/open-with/config.toml`
+- **Cache**: `~/.cache/openit/desktop_cache.json`
+- **Config**: `~/.config/openit/config.toml`
 - **Data**: Reads from standard XDG data directories
 
 ### Configuration File
@@ -169,16 +175,20 @@ The application follows XDG Base Directory specifications:
 Generate a default configuration file:
 
 ```bash
-open-with --generate-config
+openit --generate-config
 ```
 
-This creates `~/.config/open-with/config.toml` with the following structure:
+This creates `~/.config/openit/config.toml` with the following structure:
 
 ```toml
 enable_selector = false
-selector = "fzf"            # name of a profile defined in the [selectors.*] tables
 term_exec_args = "-e"
 expand_wildcards = false
+app_launch_prefix = null
+
+[default]
+gui = "fuzzel"
+tui = "fzf"
 
 [selectors.fzf]
 command = "fzf"
@@ -210,7 +220,9 @@ args = [
 env = {}
 ```
 
-The `selector` value references the profile name (e.g. `"fzf"`, `"fuzzel"`, or a custom entry) defined under the `[selectors.*]` tables. Override it or use `--selector` on the CLI to switch between profiles without editing command strings directly.
+The `[default]` table configures which selector profile is preferred in GUI and TUI environments. When `--selector auto` (the default) is used, `openit` chooses the GUI profile when launched from a graphical session and the TUI profile otherwise. Use `--selector <name>` on the CLI to force a specific profile defined under `[selectors.*]`.
+
+`app_launch_prefix` lets you prepend another command before every launch (for example `"flatpak run"` or `"env WAYLAND_DISPLAY=..."`). Set it to an empty string or remove the key to disable the prefix.
 
 ### Template Variables
 
@@ -236,6 +248,26 @@ args = [
 ]
 env = { "WOFI_THEME" = "custom.rasi" }
 ```
+
+### Terminal Applications
+
+If a desktop entry declares `Terminal=true`, `openit` automatically runs it inside a terminal emulator. Resolution happens in two steps:
+
+1. Check for handlers of the virtual MIME type `x-scheme-handler/terminal`.
+2. If none are registered, fall back to any desktop entry that advertises the `TerminalEmulator` category.
+
+By default, the terminal command is invoked with `-e` to execute the target application. If your terminal expects different arguments you can adapt the behaviour in `~/.config/openit/config.toml` (or in `~/.config/handlr/handlr.toml` for handlr-compatibility) by updating `term_exec_args`:
+
+```toml
+# Terminals that need a different flag (replace `run` as required)
+term_exec_args = "run"
+
+# Terminals that already embed the command in the Exec line or do not
+# require a launcher flag (e.g. WezTerm, kitty)
+term_exec_args = ""
+```
+
+When `term_exec_args` is an empty string or the key is omitted, no additional arguments are added before the target command.
 
 ### Environment Variables
 
@@ -283,7 +315,7 @@ The application consists of several modules:
 
 ### Caching Strategy
 
-Desktop files are parsed once and cached to `~/.cache/open-with/desktop_cache.json` for improved performance. The cache is automatically rebuilt when:
+Desktop files are parsed once and cached to `~/.cache/openit/desktop_cache.json` for improved performance. The cache is automatically rebuilt when:
 
 - Cache file doesn't exist
 - Cache file is corrupted

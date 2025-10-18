@@ -4,11 +4,41 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SelectorProfileType {
+    Gui,
+    Tui,
+}
+
+impl Default for SelectorProfileType {
+    fn default() -> Self {
+        SelectorProfileType::Gui
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SelectorDefaults {
+    pub gui: String,
+    pub tui: String,
+}
+
+impl Default for SelectorDefaults {
+    fn default() -> Self {
+        Self {
+            gui: "fuzzel".into(),
+            tui: "fzf".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SelectorSettings {
     pub enable_selector: bool,
-    pub selector: String,
+    #[serde(rename = "default")]
+    pub defaults: SelectorDefaults,
     pub term_exec_args: Option<String>,
     pub expand_wildcards: bool,
 }
@@ -17,9 +47,18 @@ impl Default for SelectorSettings {
     fn default() -> Self {
         Self {
             enable_selector: false,
-            selector: "fzf".into(),
+            defaults: SelectorDefaults::default(),
             term_exec_args: Some("-e".into()),
             expand_wildcards: false,
+        }
+    }
+}
+
+impl SelectorSettings {
+    pub fn default_for(&self, profile_type: SelectorProfileType) -> &str {
+        match profile_type {
+            SelectorProfileType::Gui => &self.defaults.gui,
+            SelectorProfileType::Tui => &self.defaults.tui,
         }
     }
 }
@@ -36,6 +75,7 @@ pub struct SelectorProfile {
     pub marker_available: Option<String>,
     pub prompt_template: Option<String>,
     pub header_template: Option<String>,
+    pub selector_type: SelectorProfileType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +90,8 @@ pub struct Config {
     pub marker_available: String,
     pub prompt_template: String,
     pub header_template: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_launch_prefix: Option<String>,
 }
 
 impl Default for Config {
@@ -76,6 +118,7 @@ impl Default for Config {
                 marker_available: None,
                 prompt_template: None,
                 header_template: None,
+                selector_type: SelectorProfileType::Tui,
             },
         );
 
@@ -98,6 +141,7 @@ impl Default for Config {
                 marker_available: Some("   ".to_string()),
                 prompt_template: None,
                 header_template: None,
+                selector_type: SelectorProfileType::Gui,
             },
         );
 
@@ -117,6 +161,7 @@ impl Default for Config {
                 marker_available: Some("   ".to_string()),
                 prompt_template: None,
                 header_template: None,
+                selector_type: SelectorProfileType::Gui,
             },
         );
 
@@ -128,6 +173,7 @@ impl Default for Config {
             marker_available: "  ".to_string(),
             prompt_template: "Open '{file|truncate:20}' with: ".to_string(),
             header_template: "★=Default ▶=XDG Associated  =Available".to_string(),
+            app_launch_prefix: None,
         }
     }
 }
@@ -176,7 +222,7 @@ impl Config {
     pub fn config_path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("open-with")
+            .join("openit")
             .join("config.toml")
     }
 
@@ -189,6 +235,55 @@ impl Config {
 
     pub fn get_selector_profile(&self, name: &str) -> Option<&SelectorProfile> {
         self.selector_profiles.get(name)
+    }
+
+    pub fn selector_candidates(&self, preferred: SelectorProfileType) -> Vec<String> {
+        let type_order = match preferred {
+            SelectorProfileType::Gui => [SelectorProfileType::Gui, SelectorProfileType::Tui],
+            SelectorProfileType::Tui => [SelectorProfileType::Tui, SelectorProfileType::Gui],
+        };
+
+        let mut candidates = Vec::new();
+
+        for ty in type_order {
+            let default_name = self.selector.default_for(ty).trim();
+            if !default_name.is_empty()
+                && !candidates.iter().any(|existing| existing == default_name)
+            {
+                candidates.push(default_name.to_string());
+            }
+
+            let mut names: Vec<String> = self
+                .selector_profiles
+                .iter()
+                .filter_map(|(name, profile)| {
+                    if profile.selector_type == ty {
+                        Some(name.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            names.sort();
+
+            for name in names {
+                if !candidates.contains(&name) {
+                    candidates.push(name);
+                }
+            }
+        }
+
+        let mut remaining: Vec<String> = self
+            .selector_profiles
+            .keys()
+            .filter(|name| !candidates.contains(*name))
+            .cloned()
+            .collect();
+        remaining.sort();
+
+        candidates.extend(remaining);
+
+        candidates
     }
 
     pub fn get_marker<'a>(
@@ -238,23 +333,33 @@ mod tests {
         let config = Config::default();
 
         assert!(!config.selector.enable_selector);
-        assert_eq!(config.selector.selector, "fzf");
+        assert_eq!(config.selector.defaults.gui, "fuzzel");
+        assert_eq!(config.selector.defaults.tui, "fzf");
         // Should have default fzf and fuzzel configs
         assert!(config.selector_profiles.contains_key("fzf"));
         assert!(config.selector_profiles.contains_key("fuzzel"));
 
         let fzf_config = config.get_selector_profile("fzf").unwrap();
+        assert_eq!(fzf_config.selector_type, SelectorProfileType::Tui);
+
         assert_eq!(fzf_config.command, "fzf");
         assert!(fzf_config.args.contains(&"--reverse".to_string()));
+
+        let fuzzel_config = config.get_selector_profile("fuzzel").unwrap();
+        assert_eq!(fuzzel_config.selector_type, SelectorProfileType::Gui);
+
+        assert!(config.app_launch_prefix.is_none());
     }
 
     #[test]
     fn test_config_serialization() {
-        let config = Config::default();
+        let mut config = Config::default();
+        config.app_launch_prefix = Some("flatpak run".to_string());
 
         // Test serialization
         let toml_string = toml::to_string(&config).unwrap();
         assert!(toml_string.contains("[selectors.fzf]"));
+        assert!(toml_string.contains("app_launch_prefix = \"flatpak run\""));
 
         // Test deserialization
         let deserialized: Config = toml::from_str(&toml_string).unwrap();
@@ -262,6 +367,7 @@ mod tests {
             config.selector_profiles.len(),
             deserialized.selector_profiles.len()
         );
+        assert_eq!(config.app_launch_prefix, deserialized.app_launch_prefix);
     }
 
     #[test]
@@ -278,6 +384,7 @@ mod tests {
             marker_available: None,
             prompt_template: None,
             header_template: None,
+            selector_type: SelectorProfileType::Gui,
         };
 
         // Test adding directly to the HashMap
@@ -290,9 +397,22 @@ mod tests {
     }
 
     #[test]
+    fn test_selector_candidates_preferred_order() {
+        let config = Config::default();
+
+        let gui_candidates = config.selector_candidates(SelectorProfileType::Gui);
+        assert_eq!(gui_candidates.first().unwrap(), "fuzzel");
+        assert!(gui_candidates.iter().any(|name| name == "fzf"));
+
+        let tui_candidates = config.selector_candidates(SelectorProfileType::Tui);
+        assert_eq!(tui_candidates.first().unwrap(), "fzf");
+        assert!(tui_candidates.iter().any(|name| name == "fuzzel"));
+    }
+
+    #[test]
     fn test_config_path() {
         let path = Config::config_path();
-        assert!(path.ends_with("open-with/config.toml"));
+        assert!(path.ends_with("openit/config.toml"));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Code coverage script for open-with project
+# Code coverage script for openit project
 # Generates code coverage report using cargo-tarpaulin
 
 set -e

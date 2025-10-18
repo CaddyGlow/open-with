@@ -1,4 +1,5 @@
 use clap::{Args as ClapArgs, Parser, Subcommand};
+use clap_complete::Shell;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +110,10 @@ pub enum Command {
     Unset(UnsetArgs),
     /// List configured handlers.
     List(ListArgs),
+    /// Get available applications for a MIME type or extension.
+    Get(GetArgs),
+    /// Generate a shell completion script.
+    Completions(CompletionsArgs),
 }
 
 #[derive(ClapArgs, Debug, Clone)]
@@ -152,6 +157,32 @@ pub struct ListArgs {
     /// Output handler info as JSON.
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+pub struct GetArgs {
+    /// MIME type or file extension to query.
+    #[arg(value_name = "MIME_OR_EXT")]
+    pub mime: String,
+    /// Output as JSON.
+    #[arg(long)]
+    pub json: bool,
+    /// Show desktop actions as separate entries.
+    #[arg(short, long)]
+    pub actions: bool,
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+pub struct CompletionsArgs {
+    /// Target shell for the completions (bash, zsh, fish, powershell, elvish, fig, nushell).
+    #[arg(value_enum)]
+    pub shell: Shell,
+    /// Optional output path (prints to stdout when not provided).
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    /// Override the binary name used in the generated script.
+    #[arg(long, default_value = "openit")]
+    pub bin_name: String,
 }
 
 impl OpenArgs {
@@ -217,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_cli_default_open() {
-        let cli = Cli::try_parse_from(["open-with", "file.txt"]).unwrap();
+        let cli = Cli::try_parse_from(["openit", "file.txt"]).unwrap();
         assert!(cli.command.is_none());
         assert_eq!(cli.open.target.as_deref(), Some("file.txt"));
         assert_eq!(cli.open.selector, SelectorKind::Auto);
@@ -225,13 +256,13 @@ mod tests {
 
     #[test]
     fn test_cli_named_selector_profile() {
-        let cli = Cli::try_parse_from(["open-with", "--selector", "rofi", "file.txt"]).unwrap();
+        let cli = Cli::try_parse_from(["openit", "--selector", "rofi", "file.txt"]).unwrap();
         assert_eq!(cli.open.selector, SelectorKind::Named("rofi".to_string()));
     }
 
     #[test]
     fn test_cli_set_subcommand() {
-        let cli = Cli::try_parse_from(["open-with", "set", "text/plain", "helix.desktop"]).unwrap();
+        let cli = Cli::try_parse_from(["openit", "set", "text/plain", "helix.desktop"]).unwrap();
         match cli.command {
             Some(Command::Set(args)) => {
                 assert_eq!(args.mime, "text/plain");

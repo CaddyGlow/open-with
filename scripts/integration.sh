@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-bin=./target/release/open-with
+bin=./target/release/openit
 folder=$(mktemp -d)
 fn=$folder/test
 echo "Hello World" >$fn.txt

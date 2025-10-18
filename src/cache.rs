@@ -271,9 +271,7 @@ mod tests {
             comment: Some("Test application".to_string()),
             icon: Some("test-icon".to_string()),
             mime_types: vec!["text/plain".to_string()],
-            no_display: false,
-            hidden: false,
-            terminal: false,
+            ..DesktopEntry::default()
         };
 
         DesktopFile {

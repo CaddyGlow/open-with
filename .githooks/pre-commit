@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-commit hook for open-with project
+# Pre-commit hook for openit project
 
 set -e
 

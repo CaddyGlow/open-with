@@ -123,6 +123,8 @@ mod tests {
             xdg_priority: -1,
             is_default: false,
             action_id: None,
+            requires_terminal: false,
+            is_terminal_emulator: false,
         }
     }
 

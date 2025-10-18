@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use log::{debug, info};
 use shell_words::split;
 use std::env;
@@ -84,7 +84,10 @@ impl OpenWith {
         let application_finder = ApplicationFinder::new(desktop_cache, mime_associations);
         let fuzzy_finder_runner = FuzzyFinderRunner::new();
         let selector_runner = SelectorRunner::new();
-        let executor = ApplicationExecutor::new();
+        let executor = ApplicationExecutor::with_options(
+            config.app_launch_prefix.clone(),
+            config.selector.term_exec_args.clone(),
+        );
         let regex_handlers = RegexHandlerStore::load(None)?;
 
         Ok(Self {
@@ -105,7 +108,7 @@ impl OpenWith {
 
         dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join("open-with")
+            .join("openit")
             .join("desktop_cache.json")
     }
 
@@ -135,61 +138,85 @@ impl OpenWith {
             debug!("Failed to load cache: {e}");
         }
 
-        // If cache needs invalidation or is empty, rebuild it
-        if cache.needs_invalidation() || cache.is_empty() {
+        let desktop_dirs = xdg::get_desktop_file_paths();
+        let mut cache_updated = false;
+        let rebuild = cache.needs_invalidation() || cache.is_empty();
+
+        if rebuild {
             debug!("Building desktop file cache");
             cache.clear();
+            cache_updated |= Self::populate_cache_from_dirs(&mut cache, &desktop_dirs, true);
+        } else {
+            debug!("Loaded desktop cache from disk");
+            cache_updated |= Self::populate_cache_from_dirs(&mut cache, &desktop_dirs, false);
+        }
 
-            // Get desktop directories, but handle gracefully if none exist
-            let desktop_dirs = xdg::get_desktop_file_paths();
-
-            for dir in &desktop_dirs {
-                // Skip directories that don't exist
-                if !dir.exists() {
-                    debug!("Directory does not exist: {}", dir.display());
-                    continue;
-                }
-
-                // Recursively walk through the directory and subdirectories
-                for entry in WalkDir::new(dir)
-                    .follow_links(false)
-                    .into_iter()
-                    .filter_entry(|e| {
-                        // Skip hidden directories (those starting with '.')
-                        e.file_name()
-                            .to_str()
-                            .map(|s| !s.starts_with('.'))
-                            .unwrap_or(false)
-                    })
-                    .filter_map(|e| e.ok())
-                {
-                    let path = entry.path();
-
-                    // Only process files with .desktop extension
-                    if path.is_file()
-                        && path.extension().and_then(|s| s.to_str()) == Some("desktop")
-                    {
-                        match DesktopFile::parse(path) {
-                            Ok(desktop_file) => {
-                                cache.insert(path.to_path_buf(), desktop_file);
-                            }
-                            Err(e) => {
-                                debug!("Failed to parse {}: {}", path.display(), e);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Try to save cache, but don't fail if we can't
+        if rebuild || cache_updated {
             if let Err(e) = cache.save() {
                 debug!("Failed to save cache: {e}");
             }
-        } else {
-            debug!("Loaded desktop cache from disk");
         }
 
         Box::new(cache)
+    }
+
+    fn populate_cache_from_dirs(
+        cache: &mut FileSystemCache,
+        desktop_dirs: &[PathBuf],
+        force: bool,
+    ) -> bool {
+        let mut updated = false;
+
+        for dir in desktop_dirs {
+            if !dir.exists() {
+                debug!("Directory does not exist: {}", dir.display());
+                continue;
+            }
+
+            for entry in WalkDir::new(dir)
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(|e| {
+                    e.file_name()
+                        .to_str()
+                        .map(|s| !s.starts_with('.'))
+                        .unwrap_or(false)
+                })
+                .filter_map(|e| e.ok())
+            {
+                let path = entry.path();
+
+                if !path.is_file() {
+                    continue;
+                }
+
+                if path.extension().and_then(|s| s.to_str()) != Some("desktop") {
+                    continue;
+                }
+
+                let already_cached = if force {
+                    false
+                } else {
+                    DesktopCache::get(&*cache, path).is_some()
+                };
+
+                if already_cached {
+                    continue;
+                }
+
+                match DesktopFile::parse(path) {
+                    Ok(desktop_file) => {
+                        DesktopCache::insert(cache, path.to_path_buf(), desktop_file);
+                        updated = true;
+                    }
+                    Err(e) => {
+                        debug!("Failed to parse {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
+
+        updated
     }
 
     fn resolve_launch_target(raw: &str) -> Result<LaunchTarget> {
@@ -236,8 +263,11 @@ impl OpenWith {
         applications: &[ApplicationEntry],
         file_name: &str,
     ) -> Result<Option<usize>> {
+        let preferred_type = self.preferred_selector_profile_type();
         let fuzzer_name = match &self.args.selector {
-            SelectorKind::Auto => self.fuzzy_finder_runner.detect_available(&self.config)?,
+            SelectorKind::Auto => self
+                .fuzzy_finder_runner
+                .detect_available(&self.config, preferred_type)?,
             SelectorKind::Named(name) => {
                 if self.config.get_selector_profile(name).is_some() {
                     name.clone()
@@ -246,13 +276,49 @@ impl OpenWith {
                         "Selector profile `{}` not found; falling back to auto fuzzy detection",
                         name
                     );
-                    self.fuzzy_finder_runner.detect_available(&self.config)?
+                    self.fuzzy_finder_runner
+                        .detect_available(&self.config, preferred_type)?
                 }
             }
         };
 
         self.fuzzy_finder_runner
             .run(&self.config, applications, file_name, &fuzzer_name)
+    }
+
+    fn resolve_terminal_launcher(&self) -> Result<Vec<String>> {
+        let mut candidates = self
+            .application_finder
+            .find_for_mime("x-scheme-handler/terminal", false);
+
+        if candidates.is_empty() {
+            candidates = self.application_finder.find_terminal_emulators();
+        }
+
+        if candidates.is_empty() {
+            anyhow::bail!(
+                "No terminal emulator found. Install a terminal or associate one with x-scheme-handler/terminal."
+            );
+        }
+
+        let terminal_app = candidates
+            .iter()
+            .find(|app| !app.requires_terminal)
+            .or_else(|| candidates.first())
+            .ok_or_else(|| anyhow::anyhow!("No suitable terminal emulator found"))?;
+
+        info!(
+            "Using terminal emulator `{}` ({})",
+            terminal_app.name,
+            terminal_app.desktop_file.display()
+        );
+
+        ApplicationExecutor::base_command_parts(&terminal_app.exec).with_context(|| {
+            format!(
+                "Failed to prepare terminal command from `{}`",
+                terminal_app.exec
+            )
+        })
     }
 
     fn application_from_regex(handler: &RegexHandler) -> ApplicationEntry {
@@ -278,11 +344,19 @@ impl OpenWith {
             xdg_priority: handler.priority,
             is_default: false,
             action_id: None,
+            requires_terminal: handler.terminal,
+            is_terminal_emulator: false,
         }
     }
 
     fn execute_application(&self, app: &ApplicationEntry, target: &LaunchTarget) -> Result<()> {
-        self.executor.execute(app, target)
+        if app.requires_terminal {
+            let launcher = self.resolve_terminal_launcher()?;
+            self.executor
+                .execute(app, target, Some(launcher.as_slice()))
+        } else {
+            self.executor.execute(app, target, None)
+        }
     }
 
     fn output_json(
@@ -405,20 +479,7 @@ impl OpenWith {
                         }
 
                         match &self.args.selector {
-                            SelectorKind::Auto => {
-                                if let Some((cmd, args)) = self.selector_command_from_profile(
-                                    &self.config.selector.selector,
-                                    &target,
-                                    true,
-                                )? {
-                                    Ok((cmd, args))
-                                } else {
-                                    self.selector_command_from_string(
-                                        &self.config.selector.selector,
-                                        true,
-                                    )
-                                }
-                            }
+                            SelectorKind::Auto => self.resolve_auto_selector_command(&target, true),
                             SelectorKind::Named(name) => {
                                 if let Some((cmd, args)) =
                                     self.selector_command_from_profile(name, &target, false)?
@@ -562,6 +623,44 @@ impl OpenWith {
 
         Ok((command, parts))
     }
+
+    fn preferred_selector_profile_type(&self) -> config::SelectorProfileType {
+        if io::stdout().is_terminal() {
+            config::SelectorProfileType::Tui
+        } else {
+            config::SelectorProfileType::Gui
+        }
+    }
+
+    fn selector_name_candidates(&self) -> Vec<String> {
+        self.config
+            .selector_candidates(self.preferred_selector_profile_type())
+    }
+
+    fn resolve_auto_selector_command(
+        &self,
+        target: &LaunchTarget,
+        append_term_args: bool,
+    ) -> Result<(String, Vec<String>)> {
+        let candidates = self.selector_name_candidates();
+        let mut last_error: Option<anyhow::Error> = None;
+
+        for name in candidates {
+            match self.selector_command_from_profile(&name, target, append_term_args)? {
+                Some(result) => return Ok(result),
+                None => match self.selector_command_from_string(&name, append_term_args) {
+                    Ok(result) => return Ok(result),
+                    Err(err) => last_error = Some(err),
+                },
+            }
+        }
+
+        if let Some(err) = last_error {
+            Err(err)
+        } else {
+            anyhow::bail!("No selector command configured for auto mode")
+        }
+    }
 }
 
 fn handle_command(command: Command) -> Result<()> {
@@ -635,15 +734,173 @@ fn handle_command(command: Command) -> Result<()> {
             }
             Ok(())
         }
+        Command::Get(args) => {
+            use std::collections::BTreeMap;
+            use wildmatch::WildMatch;
+
+            let pattern = normalize_mime_input(&args.mime)?;
+            let desktop_cache = OpenWith::load_desktop_cache();
+            let mime_associations = MimeAssociations::load();
+            let application_finder = ApplicationFinder::new(desktop_cache, mime_associations);
+
+            // Check if pattern contains wildcard
+            if pattern.contains('*') {
+                // Collect all unique MIME types from desktop files
+                let all_mime_types: std::collections::HashSet<String> =
+                    application_finder.all_mime_types().into_iter().collect();
+
+                let matcher = WildMatch::new(&pattern);
+                let matching_mimes: Vec<String> = all_mime_types
+                    .into_iter()
+                    .filter(|mime| matcher.matches(mime))
+                    .collect();
+
+                if args.json {
+                    let mut results = BTreeMap::new();
+                    for mime in &matching_mimes {
+                        let applications = application_finder.find_for_mime(mime, args.actions);
+                        if !applications.is_empty() {
+                            results.insert(mime.clone(), applications);
+                        }
+                    }
+                    let output = serde_json::json!({
+                        "pattern": pattern,
+                        "matching_mimes": matching_mimes,
+                        "results": results,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&output)?);
+                } else {
+                    println!("Pattern: {}", pattern);
+                    println!("Matching MIME types: {}", matching_mimes.len());
+
+                    if matching_mimes.is_empty() {
+                        println!("No MIME types match this pattern.");
+                    } else {
+                        for mime in matching_mimes {
+                            let applications =
+                                application_finder.find_for_mime(&mime, args.actions);
+                            if applications.is_empty() {
+                                continue;
+                            }
+
+                            println!("\n{} ({} applications):", mime, applications.len());
+                            for app in &applications {
+                                let mut prefix = "  ";
+                                if app.is_default {
+                                    prefix = "★ ";
+                                } else if app.is_xdg {
+                                    prefix = "▶ ";
+                                }
+                                print!("  {}{}", prefix, app.name);
+                                if let Some(action_id) = &app.action_id {
+                                    print!(" [action: {}]", action_id);
+                                }
+                                println!();
+                            }
+                        }
+                        println!("\nLegend: ★=Default  ▶=XDG Associated  (space)=Available");
+                    }
+                }
+            } else {
+                // No wildcard - show applications for a single MIME type
+                let applications = application_finder.find_for_mime(&pattern, args.actions);
+
+                if args.json {
+                    let xdg_associations: Vec<String> = vec![];
+                    let output = serde_json::json!({
+                        "mimetype": pattern,
+                        "xdg_associations": xdg_associations,
+                        "applications": applications,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&output)?);
+                } else {
+                    println!("MIME type: {}", pattern);
+                    if applications.is_empty() {
+                        println!("No applications found for this MIME type.");
+                    } else {
+                        println!("\nAvailable applications ({}):", applications.len());
+                        for (i, app) in applications.iter().enumerate() {
+                            let mut prefix = "  ";
+                            if app.is_default {
+                                prefix = "★ ";
+                            } else if app.is_xdg {
+                                prefix = "▶ ";
+                            }
+
+                            print!("{}{}", prefix, app.name);
+                            if let Some(action_id) = &app.action_id {
+                                print!(" [action: {}]", action_id);
+                            }
+                            println!();
+
+                            if let Some(comment) = &app.comment {
+                                println!("    {}", comment);
+                            }
+                            println!("    Exec: {}", app.exec);
+                            println!("    Desktop file: {}", app.desktop_file.display());
+
+                            if i < applications.len() - 1 {
+                                println!();
+                            }
+                        }
+                        println!("\nLegend: ★=Default  ▶=XDG Associated  (space)=Available");
+                    }
+                }
+            }
+            Ok(())
+        }
+        Command::Completions(args) => {
+            let mut command = Cli::command();
+            let shell = args.shell;
+            let bin_name = args.bin_name;
+
+            if let Some(path) = args.output {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut file = fs::File::create(&path)?;
+                clap_complete::generate(shell, &mut command, bin_name.clone(), &mut file);
+                println!("Generated {shell} completions at {}", path.display());
+            } else {
+                let mut stdout = std::io::stdout();
+                clap_complete::generate(shell, &mut command, bin_name, &mut stdout);
+            }
+
+            Ok(())
+        }
     }
 }
 
 fn normalize_mime_input(input: &str) -> Result<String> {
-    if input.contains('/') || input.contains('*') {
-        return Ok(input.to_string());
+    let trimmed = input.trim();
+
+    if trimmed.contains('*') {
+        return Ok(trimmed.to_string());
     }
 
-    let normalized = input.trim_start_matches('.');
+    if let Some((type_part_raw, subtype_raw)) = trimmed.split_once('/') {
+        let type_part = type_part_raw.trim().to_ascii_lowercase();
+        let subtype = subtype_raw.trim().to_ascii_lowercase();
+
+        if subtype.is_empty() {
+            anyhow::bail!("Invalid MIME type: {}", input);
+        }
+
+        if let Some(guess) = mime_guess::from_ext(subtype.as_str()).first() {
+            if guess.type_().as_str() == type_part {
+                return Ok(guess.essence_str().to_string());
+            }
+        }
+
+        let candidate = format!("{type_part}/{subtype}");
+        if let Ok(parsed) = candidate.parse::<mime::Mime>() {
+            return Ok(parsed.essence_str().to_string());
+        }
+
+        anyhow::bail!("Invalid MIME type: {}", input);
+    }
+
+    let normalized = trimmed.trim_start_matches('.');
     mime_guess::from_ext(normalized)
         .first()
         .map(|mime| mime.essence_str().to_string())
@@ -682,6 +939,10 @@ fn should_skip_handler_validation() -> bool {
 }
 
 fn main() -> Result<()> {
+    clap_complete::CompleteEnv::with_factory(|| Cli::command().name("openit"))
+        .completer("openit")
+        .complete();
+
     let Cli { open, command } = Cli::parse();
 
     if let Some(command) = command {
@@ -730,7 +991,10 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::{DesktopCache, FileSystemCache};
     use crate::cli::{EditArgs, RemoveArgs, UnsetArgs};
+    use crate::config::Config;
+    use crate::desktop_parser::{DesktopEntry, DesktopFile};
     use serial_test::serial;
     use std::collections::HashMap;
     use std::env;
@@ -767,8 +1031,66 @@ mod tests {
         file_path
     }
 
+    fn basic_desktop_content(name: &str, exec: &str, mime: &str) -> String {
+        format!("[Desktop Entry]\nName={name}\nExec={exec}\nMimeType={mime};\nTerminal=false\n")
+    }
+
     struct CacheEnvGuard {
         original: Option<OsString>,
+    }
+
+    #[test]
+    fn test_populate_cache_adds_new_entries_without_rebuild() {
+        let temp_dir = TempDir::new().unwrap();
+        let apps_dir = temp_dir.path().join("applications");
+        fs::create_dir_all(&apps_dir).unwrap();
+
+        let cache_path = temp_dir.path().join("cache.json");
+        let mut cache = FileSystemCache::new(cache_path);
+
+        let existing = create_test_desktop_file(
+            &apps_dir,
+            "existing.desktop",
+            &basic_desktop_content("Existing", "existing --flag %F", "text/plain"),
+        );
+
+        // Initial population simulates a full rebuild
+        assert!(OpenWith::populate_cache_from_dirs(
+            &mut cache,
+            &[apps_dir.clone()],
+            true
+        ));
+        assert!(DesktopCache::get(&cache, &existing).is_some());
+
+        // Add a new desktop file after the initial cache build
+        let new_entry_path = create_test_desktop_file(
+            &apps_dir,
+            "imgcat.desktop",
+            &basic_desktop_content("Imgcat", "imgcat %f", "image/png"),
+        );
+
+        // Running without a rebuild should still capture the new desktop file
+        assert!(
+            OpenWith::populate_cache_from_dirs(&mut cache, &[apps_dir.clone()], false),
+            "populate_cache_from_dirs should report updates when new files are discovered"
+        );
+
+        assert!(
+            DesktopCache::get(&cache, &new_entry_path).is_some(),
+            "Newly added desktop file should be available in cache"
+        );
+    }
+
+    #[test]
+    fn test_normalize_mime_input_alias_resolution() {
+        assert_eq!(normalize_mime_input("image/jpeg").unwrap(), "image/jpeg");
+        assert_eq!(normalize_mime_input("image/JPG").unwrap(), "image/jpeg");
+        assert_eq!(normalize_mime_input("image/png").unwrap(), "image/png");
+    }
+
+    #[test]
+    fn test_normalize_mime_input_preserves_wildcard() {
+        assert_eq!(normalize_mime_input("image/*").unwrap(), "image/*");
     }
 
     impl CacheEnvGuard {
@@ -851,6 +1173,8 @@ mod tests {
             xdg_priority: 0,
             is_default: true,
             action_id: None,
+            requires_terminal: false,
+            is_terminal_emulator: false,
         };
 
         let json = serde_json::to_string(&app).unwrap();
@@ -893,7 +1217,7 @@ mod tests {
     #[test]
     fn test_cache_path_creation() {
         let cache_path = OpenWith::cache_path();
-        assert!(cache_path.ends_with("open-with/desktop_cache.json"));
+        assert!(cache_path.ends_with("openit/desktop_cache.json"));
     }
 
     #[test]
@@ -1082,7 +1406,7 @@ Exec=test";
 
         // Create a temporary directory for the cache
         let temp_dir = TempDir::new().unwrap();
-        let cache_dir = temp_dir.path().join("open-with");
+        let cache_dir = temp_dir.path().join("openit");
         fs::create_dir_all(&cache_dir).unwrap();
 
         // Create a mock cache file
@@ -1114,6 +1438,8 @@ Exec=test";
             xdg_priority: 0,
             is_default: true,
             action_id: None,
+            requires_terminal: false,
+            is_terminal_emulator: false,
         }];
 
         let mime_type = "text/plain";
@@ -1359,6 +1685,8 @@ Exec=test";
                 xdg_priority: -1,
                 is_default: false,
                 action_id: None,
+                requires_terminal: false,
+                is_terminal_emulator: false,
             };
 
             // Extract the cleaning logic to test it
@@ -1448,7 +1776,7 @@ Exec=test";
 
         // Create a temporary directory for the cache
         let temp_dir = TempDir::new().unwrap();
-        let cache_dir = temp_dir.path().join("open-with");
+        let cache_dir = temp_dir.path().join("openit");
         fs::create_dir_all(&cache_dir).unwrap();
 
         // Create an invalid cache file
@@ -1536,6 +1864,8 @@ Exec=test";
             xdg_priority: -1,
             is_default: false,
             action_id: None,
+            requires_terminal: false,
+            is_terminal_emulator: false,
         }];
 
         let mime_type = "text/plain";
@@ -1558,6 +1888,8 @@ Exec=test";
             xdg_priority: -1,
             is_default: false,
             action_id: None,
+            requires_terminal: false,
+            is_terminal_emulator: false,
         };
 
         let temp_dir = TempDir::new().unwrap();
@@ -1566,9 +1898,138 @@ Exec=test";
         let target = LaunchTarget::File(test_file);
 
         let executor = ApplicationExecutor::new();
-        let result = executor.execute(&app, &target);
+        let result = executor.execute(&app, &target, None);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Empty exec command");
+    }
+
+    #[test]
+    fn test_resolve_terminal_launcher_prefers_scheme_handler() {
+        let mut cache = Box::new(cache::MemoryCache::new());
+
+        let terminal_entry = DesktopEntry {
+            name: "Terminal".to_string(),
+            exec: "foot".to_string(),
+            mime_types: vec!["x-scheme-handler/terminal".to_string()],
+            categories: vec!["TerminalEmulator".to_string()],
+            ..DesktopEntry::default()
+        };
+
+        let terminal_file = DesktopFile {
+            main_entry: Some(terminal_entry),
+            actions: HashMap::new(),
+        };
+
+        let terminal_path = PathBuf::from("/usr/share/applications/terminal.desktop");
+        cache.insert(terminal_path, terminal_file);
+
+        let mut associations = HashMap::new();
+        associations.insert(
+            "x-scheme-handler/terminal".to_string(),
+            vec!["terminal.desktop".to_string()],
+        );
+
+        let application_finder =
+            ApplicationFinder::new(cache, MimeAssociations::with_associations(associations));
+
+        let config = Config::default();
+        let executor = ApplicationExecutor::with_options(
+            config.app_launch_prefix.clone(),
+            config.selector.term_exec_args.clone(),
+        );
+
+        let regex_handlers = RegexHandlerStore::load(None).unwrap();
+        let args = create_test_args_json(Some(PathBuf::from("test.txt")));
+
+        let open_with = OpenWith {
+            application_finder,
+            fuzzy_finder_runner: FuzzyFinderRunner::new(),
+            selector_runner: SelectorRunner::new(),
+            executor,
+            config,
+            regex_handlers,
+            args,
+        };
+
+        let launcher = open_with.resolve_terminal_launcher().unwrap();
+        assert_eq!(launcher, vec!["foot"]);
+    }
+
+    #[test]
+    fn test_resolve_terminal_launcher_falls_back_to_category() {
+        let mut cache = Box::new(cache::MemoryCache::new());
+
+        let terminal_entry = DesktopEntry {
+            name: "Kitty".to_string(),
+            exec: "kitty --single-instance".to_string(),
+            mime_types: vec![],
+            categories: vec!["Utility".to_string(), "TerminalEmulator".to_string()],
+            ..DesktopEntry::default()
+        };
+
+        let terminal_file = DesktopFile {
+            main_entry: Some(terminal_entry),
+            actions: HashMap::new(),
+        };
+
+        cache.insert(
+            PathBuf::from("/usr/share/applications/kitty.desktop"),
+            terminal_file,
+        );
+
+        let application_finder =
+            ApplicationFinder::new(cache, MimeAssociations::with_associations(HashMap::new()));
+
+        let mut config = Config::default();
+        config.selector.term_exec_args = Some(String::new());
+        let executor = ApplicationExecutor::with_options(
+            config.app_launch_prefix.clone(),
+            config.selector.term_exec_args.clone(),
+        );
+
+        let regex_handlers = RegexHandlerStore::load(None).unwrap();
+        let args = create_test_args_json(Some(PathBuf::from("test.txt")));
+
+        let open_with = OpenWith {
+            application_finder,
+            fuzzy_finder_runner: FuzzyFinderRunner::new(),
+            selector_runner: SelectorRunner::new(),
+            executor,
+            config,
+            regex_handlers,
+            args,
+        };
+
+        let launcher = open_with.resolve_terminal_launcher().unwrap();
+        assert_eq!(launcher, vec!["kitty", "--single-instance"]);
+    }
+
+    #[test]
+    fn test_resolve_terminal_launcher_errors_without_terminal() {
+        let cache = Box::new(cache::MemoryCache::new());
+        let application_finder = ApplicationFinder::new(cache, MimeAssociations::default());
+
+        let config = Config::default();
+        let executor = ApplicationExecutor::with_options(
+            config.app_launch_prefix.clone(),
+            config.selector.term_exec_args.clone(),
+        );
+
+        let regex_handlers = RegexHandlerStore::load(None).unwrap();
+        let args = create_test_args_json(Some(PathBuf::from("test.txt")));
+
+        let open_with = OpenWith {
+            application_finder,
+            fuzzy_finder_runner: FuzzyFinderRunner::new(),
+            selector_runner: SelectorRunner::new(),
+            executor,
+            config,
+            regex_handlers,
+            args,
+        };
+
+        let err = open_with.resolve_terminal_launcher().unwrap_err();
+        assert!(err.to_string().contains("No terminal emulator found"));
     }
 
     #[test]
@@ -1699,7 +2160,7 @@ MimeType=text/plain;";
 
         let temp_dir = TempDir::new().unwrap();
         let config_dir = temp_dir.path().join("config");
-        fs::create_dir_all(config_dir.join("open-with")).unwrap();
+        fs::create_dir_all(config_dir.join("openit")).unwrap();
         let _guard = ConfigEnvGuard::set(&config_dir);
 
         let marker_path = temp_dir.path().join("regex_touched");
@@ -1713,7 +2174,7 @@ MimeType=text/plain;";
         perms.set_mode(0o755);
         fs::set_permissions(&script_path, perms).unwrap();
 
-        let regex_path = config_dir.join("open-with").join("regex_handlers.toml");
+        let regex_path = config_dir.join("openit").join("regex_handlers.toml");
         fs::write(
             &regex_path,
             format!(
@@ -1775,6 +2236,8 @@ MimeType=text/plain;";
             xdg_priority: 0,
             is_default: true,
             action_id: None,
+            requires_terminal: false,
+            is_terminal_emulator: false,
         }];
 
         // Test fzf command construction - just build the command, don't run it

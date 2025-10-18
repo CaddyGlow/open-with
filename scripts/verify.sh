@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verification script for open-with project
+# Verification script for openit project
 # Run this before committing to ensure code quality
 
 set -e

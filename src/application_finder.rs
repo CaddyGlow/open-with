@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::path::PathBuf;
+use wildmatch::WildMatch;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplicationEntry {
@@ -17,6 +18,8 @@ pub struct ApplicationEntry {
     pub xdg_priority: i32,
     pub is_default: bool,
     pub action_id: Option<String>,
+    pub requires_terminal: bool,
+    pub is_terminal_emulator: bool,
 }
 
 impl ApplicationEntry {
@@ -34,6 +37,11 @@ impl ApplicationEntry {
             xdg_priority: -1,
             is_default: false,
             action_id: None,
+            requires_terminal: entry.terminal,
+            is_terminal_emulator: entry
+                .categories
+                .iter()
+                .any(|category| category == "TerminalEmulator"),
         }
     }
 
@@ -53,6 +61,11 @@ impl ApplicationEntry {
             xdg_priority: -1,
             is_default: false,
             action_id: Some(action_id.to_string()),
+            requires_terminal: main_entry.terminal,
+            is_terminal_emulator: main_entry
+                .categories
+                .iter()
+                .any(|category| category == "TerminalEmulator"),
         }
     }
 
@@ -69,6 +82,36 @@ impl ApplicationEntry {
         self.is_default = false;
         self
     }
+}
+
+fn mime_type_matches(pattern: &str, target: &str) -> bool {
+    if pattern.eq_ignore_ascii_case(target) {
+        return true;
+    }
+
+    let pattern = pattern.trim();
+    let target = target.trim();
+
+    if pattern.is_empty() || target.is_empty() {
+        return false;
+    }
+
+    let pattern_norm = pattern.to_ascii_lowercase();
+    let target_norm = target.to_ascii_lowercase();
+
+    if pattern_norm == target_norm {
+        return true;
+    }
+
+    if !pattern_norm.contains('/') || !target_norm.contains('/') {
+        return false;
+    }
+
+    if pattern_norm.contains('*') || pattern_norm.contains('?') {
+        return WildMatch::new(&pattern_norm).matches(&target_norm);
+    }
+
+    pattern_norm == target_norm
 }
 
 pub struct ApplicationFinder {
@@ -132,7 +175,11 @@ impl ApplicationFinder {
         // Add other applications that support this MIME type
         for (path, desktop_file) in self.desktop_cache.iter() {
             if let Some(entry) = &desktop_file.main_entry {
-                if entry.mime_types.contains(&mime_type.to_string()) {
+                if entry
+                    .mime_types
+                    .iter()
+                    .any(|pattern| mime_type_matches(pattern, mime_type))
+                {
                     let desktop_id = path
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -164,6 +211,35 @@ impl ApplicationFinder {
         applications
     }
 
+    pub fn find_terminal_emulators(&self) -> Vec<ApplicationEntry> {
+        let mut emulators = Vec::new();
+        let mut seen = HashSet::new();
+
+        for (path, desktop_file) in self.desktop_cache.iter() {
+            if let Some(entry) = &desktop_file.main_entry {
+                if entry
+                    .categories
+                    .iter()
+                    .any(|category| category == "TerminalEmulator")
+                {
+                    let desktop_id = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    if seen.insert(desktop_id) {
+                        let app = ApplicationEntry::from_desktop_entry(entry, path.clone())
+                            .into_available();
+                        emulators.push(app);
+                    }
+                }
+            }
+        }
+
+        emulators
+    }
+
     pub fn find_desktop_file(&self, desktop_id: &str) -> Option<(&PathBuf, &DesktopFile)> {
         // First try exact filename match
         for (path, desktop_file) in self.desktop_cache.iter() {
@@ -181,6 +257,20 @@ impl ApplicationFinder {
 
         None
     }
+
+    pub fn all_mime_types(&self) -> Vec<String> {
+        let mut mime_types = HashSet::new();
+
+        for (_path, desktop_file) in self.desktop_cache.iter() {
+            if let Some(entry) = &desktop_file.main_entry {
+                for mime in &entry.mime_types {
+                    mime_types.insert(mime.clone());
+                }
+            }
+        }
+
+        mime_types.into_iter().collect()
+    }
 }
 
 #[cfg(test)]
@@ -196,10 +286,20 @@ mod tests {
             comment: Some(format!("Test application {}", name)),
             icon: Some(format!("{}-icon", name.to_lowercase())),
             mime_types: mime_types.iter().map(|s| s.to_string()).collect(),
-            no_display: false,
-            hidden: false,
-            terminal: false,
+            ..DesktopEntry::default()
         }
+    }
+
+    #[test]
+    fn test_mime_type_matches_exact_and_wildcard() {
+        assert!(super::mime_type_matches("image/jpeg", "image/jpeg"));
+        assert!(super::mime_type_matches("image/*", "image/png"));
+        assert!(super::mime_type_matches("text/*", "text/plain"));
+        assert!(!super::mime_type_matches("text/*", "image/png"));
+        assert!(super::mime_type_matches(
+            "APPLICATION/JSON",
+            "application/json"
+        ));
     }
 
     fn create_test_desktop_file(entry: DesktopEntry) -> DesktopFile {
@@ -223,6 +323,8 @@ mod tests {
             xdg_priority: -1,
             is_default: false,
             action_id: None,
+            requires_terminal: false,
+            is_terminal_emulator: false,
         }
     }
 
@@ -264,6 +366,23 @@ mod tests {
         assert!(!apps[0].is_xdg);
         assert!(!apps[0].is_default);
         assert_eq!(apps[0].xdg_priority, -1);
+    }
+
+    #[test]
+    fn test_find_for_mime_with_wildcard_mime_type() {
+        let mut cache = Box::new(crate::cache::MemoryCache::new());
+        let entry = create_test_desktop_entry("WildcardViewer", vec!["image/*"]);
+        let desktop_file = create_test_desktop_file(entry);
+
+        let path = PathBuf::from("/usr/share/applications/wildcardviewer.desktop");
+        cache.insert(path.clone(), desktop_file);
+
+        let associations = MimeAssociations::default();
+        let finder = ApplicationFinder::new(cache, associations);
+
+        let apps = finder.find_for_mime("image/jpeg", false);
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "WildcardViewer");
     }
 
     #[test]
@@ -361,6 +480,33 @@ mod tests {
         assert_eq!(apps.len(), 1); // Only main entry, no actions
         assert_eq!(apps[0].name, "ImageViewer");
         assert!(apps[0].action_id.is_none());
+    }
+
+    #[test]
+    fn test_find_terminal_emulators() {
+        let mut cache = Box::new(crate::cache::MemoryCache::new());
+
+        let mut terminal_entry = create_test_desktop_entry("Terminal", vec!["application/custom"]);
+        terminal_entry.categories = vec!["System".to_string(), "TerminalEmulator".to_string()];
+        let terminal_file = create_test_desktop_file(terminal_entry);
+        cache.insert(
+            PathBuf::from("/usr/share/applications/terminal.desktop"),
+            terminal_file,
+        );
+
+        let other_entry = create_test_desktop_entry("Editor", vec!["text/plain"]);
+        cache.insert(
+            PathBuf::from("/usr/share/applications/editor.desktop"),
+            create_test_desktop_file(other_entry),
+        );
+
+        let associations = MimeAssociations::default();
+        let finder = ApplicationFinder::new(cache, associations);
+
+        let emulators = finder.find_terminal_emulators();
+        assert_eq!(emulators.len(), 1);
+        assert_eq!(emulators[0].name, "Terminal");
+        assert!(emulators[0].is_terminal_emulator);
     }
 
     #[test]

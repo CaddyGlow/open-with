@@ -1,5 +1,5 @@
 use crate::application_finder::ApplicationEntry;
-use crate::config::Config;
+use crate::config::{Config, SelectorProfileType};
 use crate::template::TemplateEngine;
 use anyhow::{Context, Result};
 use log::info;
@@ -159,16 +159,29 @@ impl FuzzyFinderRunner {
         Ok(None)
     }
 
-    pub fn detect_available(&self, config: &Config) -> Result<String> {
-        if which::which("fzf").is_ok() && config.get_selector_profile("fzf").is_some() {
-            Ok("fzf".to_string())
-        } else if which::which("fuzzel").is_ok() && config.get_selector_profile("fuzzel").is_some()
-        {
-            Ok("fuzzel".to_string())
+    pub fn detect_available(
+        &self,
+        config: &Config,
+        preferred_type: SelectorProfileType,
+    ) -> Result<String> {
+        let candidates = config.selector_candidates(preferred_type);
+
+        for name in candidates {
+            if Self::candidate_available(config, &name) {
+                return Ok(name);
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "No fuzzy finder found. Install fzf or fuzzel."
+        ))
+    }
+
+    fn candidate_available(config: &Config, name: &str) -> bool {
+        if let Some(profile) = config.get_selector_profile(name) {
+            which::which(&profile.command).is_ok()
         } else {
-            Err(anyhow::anyhow!(
-                "No fuzzy finder found. Install fzf or fuzzel."
-            ))
+            which::which(name).is_ok()
         }
     }
 }
@@ -177,6 +190,7 @@ impl FuzzyFinderRunner {
 mod tests {
     use super::*;
     use crate::application_finder::ApplicationEntry;
+    use crate::config::SelectorProfile;
     use std::path::PathBuf;
 
     fn create_test_application() -> ApplicationEntry {
@@ -190,6 +204,8 @@ mod tests {
             xdg_priority: 0,
             is_default: true,
             action_id: None,
+            requires_terminal: false,
+            is_terminal_emulator: false,
         }
     }
 
@@ -204,22 +220,45 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_available_with_fzf() {
-        let config = Config::default();
+    fn test_detect_available_prefers_tui_default() {
+        let mut config = Config::default();
+        config.selector_profiles.clear();
+        config.selector_profiles.insert(
+            "sh".to_string(),
+            SelectorProfile {
+                command: "sh".to_string(),
+                selector_type: SelectorProfileType::Tui,
+                ..SelectorProfile::default()
+            },
+        );
+        config.selector.defaults.tui = "sh".to_string();
+        config.selector.defaults.gui = "missing-gui".to_string();
+
         let runner = FuzzyFinderRunner::new();
+        let result = runner.detect_available(&config, SelectorProfileType::Tui);
 
-        // This test depends on system state, so we'll test the logic
-        let result = runner.detect_available(&config);
+        assert_eq!(result.unwrap(), "sh");
+    }
 
-        // Should either succeed with a fuzzy finder name or fail with appropriate error
-        match result {
-            Ok(name) => {
-                assert!(name == "fzf" || name == "fuzzel");
-            }
-            Err(e) => {
-                assert!(e.to_string().contains("No fuzzy finder found"));
-            }
-        }
+    #[test]
+    fn test_detect_available_falls_back_to_gui() {
+        let mut config = Config::default();
+        config.selector_profiles.clear();
+        config.selector_profiles.insert(
+            "sh".to_string(),
+            SelectorProfile {
+                command: "sh".to_string(),
+                selector_type: SelectorProfileType::Gui,
+                ..SelectorProfile::default()
+            },
+        );
+        config.selector.defaults.tui = "missing-tui".to_string();
+        config.selector.defaults.gui = "sh".to_string();
+
+        let runner = FuzzyFinderRunner::new();
+        let result = runner.detect_available(&config, SelectorProfileType::Tui);
+
+        assert_eq!(result.unwrap(), "sh");
     }
 
     #[test]
@@ -240,7 +279,6 @@ mod tests {
     fn test_run_command_construction() {
         // Test that we can construct the command without actually running it
         let config = Config::default();
-        let runner = FuzzyFinderRunner::new();
         let _applications = vec![create_test_application()];
 
         // We can't easily test the actual execution without mocking,
@@ -328,6 +366,8 @@ mod tests {
                 xdg_priority: -1,
                 is_default: false,
                 action_id: None,
+                requires_terminal: false,
+                is_terminal_emulator: false,
             },
         ];
 

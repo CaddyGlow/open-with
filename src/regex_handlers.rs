@@ -99,7 +99,7 @@ impl RegexHandlerStore {
     pub fn config_path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("open-with")
+            .join("openit")
             .join("regex_handlers.toml")
     }
 

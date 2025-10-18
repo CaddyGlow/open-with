@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Format script for open-with project
+# Format script for openit project
 
 set -e
 

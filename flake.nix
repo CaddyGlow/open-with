@@ -1,5 +1,5 @@
 {
-  description = "Nix flake for the open-with command-line tool";
+  description = "Nix flake for the openit command-line tool";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";

@@ -164,25 +164,25 @@ jobs:
         run: cargo build --release --verbose
 
       - name: Strip binary
-        run: strip target/release/open-with
+        run: strip target/release/openit
 
       - name: Run binary smoke test
         run: |
-          ./target/release/open-with --version
-          ./target/release/open-with --build-info
-          ./target/release/open-with --help
+          ./target/release/openit --version
+          ./target/release/openit --build-info
+          ./target/release/openit --help
 
       - name: Calculate binary size
         run: |
-          SIZE=$(stat -c%s target/release/open-with)
+          SIZE=$(stat -c%s target/release/openit)
           echo "Binary size: $SIZE bytes"
           echo "BINARY_SIZE=$SIZE" >> $GITHUB_ENV
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: open-with-linux-x86_64
-          path: target/release/open-with
+          name: openit-linux-x86_64
+          path: target/release/openit
           retention-days: 30
 
   # Job 5: Integration Tests
@@ -208,11 +208,11 @@ jobs:
       - name: Download binary artifact
         uses: actions/download-artifact@v5
         with:
-          name: open-with-linux-x86_64
+          name: openit-linux-x86_64
           path: ./
 
       - name: Make binary executable
-        run: chmod +x open-with
+        run: chmod +x openit
 
       - name: Create test files
         run: |
@@ -221,14 +221,14 @@ jobs:
 
       - name: Test MIME type detection
         run: |
-          ./open-with test.txt --json | jq '.mimetype' | grep -q "text/plain"
-          # ./open-with test.json --json | jq '.mimetype' | grep -q "application/json"
+          ./openit test.txt --json | jq '.mimetype' | grep -q "text/plain"
+          # ./openit test.json --json | jq '.mimetype' | grep -q "application/json"
 
       - name: Test cache functionality
         run: |
-          ./open-with test.txt --json > /dev/null
-          ./open-with --clear-cache
-          ./open-with test.txt --json > /dev/null
+          ./openit test.txt --json > /dev/null
+          ./openit --clear-cache
+          ./openit test.txt --json > /dev/null
 
   # Job 6: Benchmark
   benchmark:
@@ -276,11 +276,11 @@ jobs:
           echo "|------|------|" >> $GITHUB_STEP_SUMMARY
 
           # Benchmark startup time
-          STARTUP_TIME=$(hyperfine --export-json /tmp/startup.json './target/release/open-with --version' | jq -r '.results[0].mean')
+          STARTUP_TIME=$(hyperfine --export-json /tmp/startup.json './target/release/openit --version' | jq -r '.results[0].mean')
           echo "| Startup time | ${STARTUP_TIME}s |" >> $GITHUB_STEP_SUMMARY
 
           # Benchmark file processing
-          PROCESS_TIME=$(hyperfine --export-json /tmp/process.json './target/release/open-with test.txt --json' | jq -r '.results[0].mean')
+          PROCESS_TIME=$(hyperfine --export-json /tmp/process.json './target/release/openit test.txt --json' | jq -r '.results[0].mean')
           echo "| File processing | ${PROCESS_TIME}s |" >> $GITHUB_STEP_SUMMARY
 
   # Job 7: Security Audit

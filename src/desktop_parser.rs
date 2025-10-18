@@ -6,14 +6,92 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopEntry {
+    #[serde(default = "DesktopEntry::default_entry_type")]
+    pub entry_type: String,
+    #[serde(default)]
+    pub version: Option<String>,
     pub name: String,
+    #[serde(default)]
+    pub generic_name: Option<String>,
     pub exec: String,
+    #[serde(default)]
     pub comment: Option<String>,
+    #[serde(default)]
     pub icon: Option<String>,
-    pub mime_types: Vec<String>,
+    #[serde(default)]
     pub no_display: bool,
+    #[serde(default)]
     pub hidden: bool,
+    #[serde(default)]
+    pub only_show_in: Vec<String>,
+    #[serde(default)]
+    pub not_show_in: Vec<String>,
+    #[serde(default)]
+    pub dbus_activatable: bool,
+    #[serde(default)]
+    pub try_exec: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
     pub terminal: bool,
+    #[serde(default)]
+    pub mime_types: Vec<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub implements: Vec<String>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default)]
+    pub startup_notify: bool,
+    #[serde(default)]
+    pub startup_wm_class: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub prefers_non_default_gpu: bool,
+    #[serde(default)]
+    pub single_main_window: bool,
+    #[serde(default)]
+    pub actions: Vec<String>,
+}
+
+impl DesktopEntry {
+    fn default_entry_type() -> String {
+        "Application".to_string()
+    }
+}
+
+impl Default for DesktopEntry {
+    fn default() -> Self {
+        Self {
+            entry_type: DesktopEntry::default_entry_type(),
+            version: None,
+            name: String::new(),
+            generic_name: None,
+            exec: String::new(),
+            comment: None,
+            icon: None,
+            no_display: false,
+            hidden: false,
+            only_show_in: Vec::new(),
+            not_show_in: Vec::new(),
+            dbus_activatable: false,
+            try_exec: None,
+            path: None,
+            terminal: false,
+            mime_types: Vec::new(),
+            categories: Vec::new(),
+            implements: Vec::new(),
+            keywords: Vec::new(),
+            startup_notify: false,
+            startup_wm_class: None,
+            url: None,
+            prefers_non_default_gpu: false,
+            single_main_window: false,
+            actions: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,48 +177,112 @@ impl DesktopFile {
         })
     }
 
+    fn parse_bool(value: Option<&String>) -> bool {
+        value
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                if s.eq_ignore_ascii_case("true") {
+                    true
+                } else if s.eq_ignore_ascii_case("false") {
+                    false
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false)
+    }
+
+    fn parse_list(value: Option<&String>) -> Vec<String> {
+        value
+            .map(|s| {
+                s.split(';')
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(std::string::ToString::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn parse_optional_string(value: Option<&String>) -> Option<String> {
+        value.and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+    }
+
     fn build_desktop_entry(fields: &HashMap<String, String>) -> Result<DesktopEntry> {
-        let name = fields
-            .get("Name")
-            .ok_or_else(|| anyhow::anyhow!("Missing Name field"))?
-            .clone();
+        let entry_type = Self::parse_optional_string(fields.get("Type"))
+            .unwrap_or_else(DesktopEntry::default_entry_type);
+
+        let name = Self::parse_optional_string(fields.get("Name"))
+            .ok_or_else(|| anyhow::anyhow!("Missing Name field"))?;
 
         let exec = fields
             .get("Exec")
             .ok_or_else(|| anyhow::anyhow!("Missing Exec field"))?
             .clone();
 
-        let mime_types = fields
-            .get("MimeType")
-            .map(|s| {
-                s.split(';')
-                    .filter(|s| !s.is_empty())
-                    .map(std::string::ToString::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
+        if exec.trim().is_empty() {
+            anyhow::bail!("Missing Exec field");
+        }
 
-        let no_display = fields
-            .get("NoDisplay")
-            .is_some_and(|s| s.to_lowercase() == "true");
+        let version = Self::parse_optional_string(fields.get("Version"));
+        let generic_name = Self::parse_optional_string(fields.get("GenericName"));
+        let comment = Self::parse_optional_string(fields.get("Comment"));
+        let icon = Self::parse_optional_string(fields.get("Icon"));
 
-        let hidden = fields
-            .get("Hidden")
-            .is_some_and(|s| s.to_lowercase() == "true");
+        let mime_types = Self::parse_list(fields.get("MimeType"));
 
-        let terminal = fields
-            .get("Terminal")
-            .is_some_and(|s| s.to_lowercase() == "true");
+        let no_display = Self::parse_bool(fields.get("NoDisplay"));
+        let hidden = Self::parse_bool(fields.get("Hidden"));
+        let only_show_in = Self::parse_list(fields.get("OnlyShowIn"));
+        let not_show_in = Self::parse_list(fields.get("NotShowIn"));
+        let dbus_activatable = Self::parse_bool(fields.get("DBusActivatable"));
+        let try_exec = Self::parse_optional_string(fields.get("TryExec"));
+        let path = Self::parse_optional_string(fields.get("Path"));
+        let terminal = Self::parse_bool(fields.get("Terminal"));
+        let categories = Self::parse_list(fields.get("Categories"));
+        let implements = Self::parse_list(fields.get("Implements"));
+        let keywords = Self::parse_list(fields.get("Keywords"));
+        let startup_notify = Self::parse_bool(fields.get("StartupNotify"));
+        let startup_wm_class = Self::parse_optional_string(fields.get("StartupWMClass"));
+        let url = Self::parse_optional_string(fields.get("URL"));
+        let prefers_non_default_gpu = Self::parse_bool(fields.get("PrefersNonDefaultGPU"));
+        let single_main_window = Self::parse_bool(fields.get("SingleMainWindow"));
+        let actions = Self::parse_list(fields.get("Actions"));
 
         Ok(DesktopEntry {
+            entry_type,
+            version,
             name,
             exec,
-            comment: fields.get("Comment").cloned(),
-            icon: fields.get("Icon").cloned(),
-            mime_types,
+            generic_name,
+            comment,
+            icon,
             no_display,
             hidden,
+            only_show_in,
+            not_show_in,
+            dbus_activatable,
+            try_exec,
+            path,
             terminal,
+            mime_types,
+            categories,
+            implements,
+            keywords,
+            startup_notify,
+            startup_wm_class,
+            url,
+            prefers_non_default_gpu,
+            single_main_window,
+            actions,
         })
     }
 
@@ -193,6 +335,7 @@ NoDisplay=false";
         assert_eq!(entry.mime_types, vec!["text/plain", "text/html"]);
         assert!(!entry.terminal);
         assert!(!entry.no_display);
+        assert!(entry.categories.is_empty());
     }
 
     #[test]
@@ -235,6 +378,26 @@ Exec=viewer --print %f";
         assert_eq!(print_action.name, "Print Image");
         assert_eq!(print_action.exec, "viewer --print %f");
         assert_eq!(print_action.icon, None);
+    }
+
+    #[test]
+    fn test_parse_desktop_file_with_categories() {
+        let content = r"[Desktop Entry]
+Name=Terminal App
+Exec=terminal --new
+Categories=Utility;TerminalEmulator;System;
+Terminal=false";
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{content}").unwrap();
+
+        let desktop_file = DesktopFile::parse(temp_file.path()).unwrap();
+        let entry = desktop_file.main_entry.unwrap();
+
+        assert_eq!(
+            entry.categories,
+            vec!["Utility", "TerminalEmulator", "System"]
+        );
     }
 
     #[test]
@@ -449,5 +612,80 @@ Exec=app --last";
         // Should handle last section being an action
         assert_eq!(desktop_file.actions.len(), 1);
         assert!(desktop_file.actions.contains_key("last"));
+    }
+
+    #[test]
+    fn test_parse_desktop_file_with_recognized_keys() {
+        let content = r"[Desktop Entry]
+Type=Application
+Version=1.2
+Name=Full Featured App
+GenericName=Full App
+NoDisplay=true
+Comment=Full featured application
+Icon=full-app
+Hidden=true
+OnlyShowIn=GNOME;KDE;
+NotShowIn=XFCE;
+DBusActivatable=true
+TryExec=/usr/bin/full
+Exec=full %F
+Path=/opt/full
+Terminal=true
+MimeType=text/plain;text/html;
+Categories=Utility;Office;
+Implements=org.example.Full;org.example.Advanced;
+Keywords=full;featured;app;
+StartupNotify=true
+StartupWMClass=FullAppClass
+URL=https://example.com
+PrefersNonDefaultGPU=true
+SingleMainWindow=true
+Actions=Edit;View;
+
+[Desktop Action Edit]
+Name=Edit Document
+Exec=full --edit %F
+
+[Desktop Action View]
+Name=View Document
+Exec=full --view %F";
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{content}").unwrap();
+
+        let desktop_file = DesktopFile::parse(temp_file.path()).unwrap();
+        let entry = desktop_file.main_entry.unwrap();
+
+        assert_eq!(entry.entry_type, "Application");
+        assert_eq!(entry.version.as_deref(), Some("1.2"));
+        assert_eq!(entry.generic_name.as_deref(), Some("Full App"));
+        assert!(entry.no_display);
+        assert_eq!(entry.comment.as_deref(), Some("Full featured application"));
+        assert_eq!(entry.icon.as_deref(), Some("full-app"));
+        assert!(entry.hidden);
+        assert_eq!(entry.only_show_in, vec!["GNOME", "KDE"]);
+        assert_eq!(entry.not_show_in, vec!["XFCE"]);
+        assert!(entry.dbus_activatable);
+        assert_eq!(entry.try_exec.as_deref(), Some("/usr/bin/full"));
+        assert_eq!(entry.path.as_deref(), Some("/opt/full"));
+        assert!(entry.terminal);
+        assert_eq!(entry.mime_types, vec!["text/plain", "text/html"]);
+        assert_eq!(entry.categories, vec!["Utility", "Office"]);
+        assert_eq!(
+            entry.implements,
+            vec!["org.example.Full", "org.example.Advanced"]
+        );
+        assert_eq!(entry.keywords, vec!["full", "featured", "app"]);
+        assert!(entry.startup_notify);
+        assert_eq!(entry.startup_wm_class.as_deref(), Some("FullAppClass"));
+        assert_eq!(entry.url.as_deref(), Some("https://example.com"));
+        assert!(entry.prefers_non_default_gpu);
+        assert!(entry.single_main_window);
+        assert_eq!(entry.actions, vec!["Edit", "View"]);
+
+        assert_eq!(desktop_file.actions.len(), 2);
+        assert!(desktop_file.actions.contains_key("Edit"));
+        assert!(desktop_file.actions.contains_key("View"));
     }
 }

@@ -106,20 +106,20 @@ jobs:
       - name: Strip binary
         run: |
           if [[ "${{ matrix.target }}" == *"musl"* ]]; then
-            strip target/${{ matrix.target }}/release/open-with
+            strip target/${{ matrix.target }}/release/openit
           else
-            strip target/${{ matrix.target }}/release/open-with
+            strip target/${{ matrix.target }}/release/openit
           fi
 
       - name: Create archive
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf open-with-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz open-with
+          tar czf openit-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz openit
 
       - name: Generate checksums
         run: |
           cd target/${{ matrix.target }}/release
-          sha256sum open-with-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz > open-with-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
+          sha256sum openit-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz > openit-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
 
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
@@ -127,8 +127,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: target/${{ matrix.target }}/release/open-with-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
-          asset_name: open-with-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
+          asset_path: target/${{ matrix.target }}/release/openit-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
+          asset_name: openit-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload Checksum
@@ -137,8 +137,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: target/${{ matrix.target }}/release/open-with-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
-          asset_name: open-with-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
+          asset_path: target/${{ matrix.target }}/release/openit-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
+          asset_name: openit-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
           asset_content_type: text/plain
 
   # Publish to crates.io

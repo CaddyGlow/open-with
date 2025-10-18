@@ -5,14 +5,14 @@ use std::sync::LazyLock;
 static XDG_DATA_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
     env::var("XDG_DATA_HOME").ok().map_or_else(
         || dirs::home_dir().map_or_else(|| PathBuf::from("/tmp"), |h| h.join(".local/share")),
-        PathBuf::from,
+        |path| expand_tilde_path(&path),
     )
 });
 
 static XDG_CONFIG_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
     env::var("XDG_CONFIG_HOME").ok().map_or_else(
         || dirs::home_dir().map_or_else(|| PathBuf::from("/tmp"), |h| h.join(".config")),
-        PathBuf::from,
+        |path| expand_tilde_path(&path),
     )
 });
 
@@ -21,7 +21,7 @@ static XDG_DATA_DIRS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
         .unwrap_or_else(|_| "/usr/local/share:/usr/share".to_string())
         .split(':')
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+        .map(expand_tilde_path)
         .collect()
 });
 
@@ -30,9 +30,33 @@ static XDG_CONFIG_DIRS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
         .unwrap_or_else(|_| "/etc/xdg".to_string())
         .split(':')
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+        .map(expand_tilde_path)
         .collect()
 });
+
+fn expand_tilde_path(path: &str) -> PathBuf {
+    if !path.starts_with('~') {
+        return PathBuf::from(path);
+    }
+
+    let Some(home) = dirs::home_dir() else {
+        return PathBuf::from(path);
+    };
+
+    if path == "~" {
+        return home;
+    }
+
+    if let Some(stripped) = path.strip_prefix("~/") {
+        return if stripped.is_empty() {
+            home
+        } else {
+            home.join(stripped)
+        };
+    }
+
+    PathBuf::from(path)
+}
 
 pub fn get_desktop_file_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
@@ -145,6 +169,7 @@ fn get_desktop_environment_names() -> Vec<String> {
 mod tests {
     use super::*;
     use serial_test::serial;
+    use std::path::PathBuf;
 
     #[test]
     #[serial]
@@ -197,6 +222,31 @@ mod tests {
         match original {
             Some(val) => env::set_var("XDG_CURRENT_DESKTOP", val),
             None => env::remove_var("XDG_CURRENT_DESKTOP"),
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_expand_tilde_path_resolves_home() {
+        let temp_home = tempfile::TempDir::new().unwrap();
+        let original_home = env::var("HOME").ok();
+        env::set_var("HOME", temp_home.path());
+
+        let expanded_dir = super::expand_tilde_path("~/applications");
+        assert_eq!(expanded_dir, temp_home.path().join("applications"));
+
+        let expanded_home = super::expand_tilde_path("~");
+        assert_eq!(expanded_home, temp_home.path());
+
+        let absolute_path = "/usr/share";
+        assert_eq!(
+            super::expand_tilde_path(absolute_path),
+            PathBuf::from(absolute_path)
+        );
+
+        match original_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
         }
     }
 

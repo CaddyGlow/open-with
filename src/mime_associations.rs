@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
+use wildmatch::WildMatch;
 
 #[derive(Debug, Default)]
 pub struct MimeAssociations {
@@ -70,11 +71,66 @@ impl MimeAssociations {
     }
 
     pub fn get_associations(&self, mime_type: &str) -> Vec<String> {
-        self.associations
-            .get(mime_type)
-            .cloned()
-            .unwrap_or_default()
+        let mut results = Vec::new();
+        let mut seen = HashSet::new();
+
+        if let Some(exact) = self.associations.get(mime_type) {
+            for handler in exact {
+                if seen.insert(handler.clone()) {
+                    results.push(handler.clone());
+                }
+            }
+        }
+
+        let mut entries: Vec<(&String, &Vec<String>)> = self.associations.iter().collect();
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        for (pattern, handlers) in entries {
+            if pattern == &mime_type {
+                continue;
+            }
+
+            if mime_pattern_matches(pattern, mime_type) {
+                for handler in handlers {
+                    if seen.insert(handler.clone()) {
+                        results.push(handler.clone());
+                    }
+                }
+            }
+        }
+
+        results
     }
+}
+
+fn mime_pattern_matches(pattern: &str, target: &str) -> bool {
+    if pattern.eq_ignore_ascii_case(target) {
+        return true;
+    }
+
+    let pattern = pattern.trim();
+    let target = target.trim();
+
+    if pattern.is_empty() || target.is_empty() {
+        return false;
+    }
+
+    let pattern_norm = pattern.to_ascii_lowercase();
+    let target_norm = target.to_ascii_lowercase();
+
+    if pattern_norm == target_norm {
+        return true;
+    }
+
+    if !pattern_norm.contains('/') || !target_norm.contains('/') {
+        return false;
+    }
+
+    if pattern_norm.contains('*') || pattern_norm.contains('?') {
+        return WildMatch::new(&pattern_norm).matches(&target_norm);
+    }
+
+    pattern_norm == target_norm
 }
 
 #[cfg(test)]
@@ -87,6 +143,7 @@ mod tests {
         let content = r"[Default Applications]
 text/plain=editor.desktop;notepad.desktop;
 image/png=viewer.desktop;
+image/*=imgcat.desktop;
 
 [Added Associations]
 text/plain=extra-editor.desktop;";
@@ -104,6 +161,10 @@ text/plain=extra-editor.desktop;";
 
         let image_apps = associations.get("image/png").unwrap();
         assert_eq!(image_apps, &vec!["viewer.desktop"]);
+        assert_eq!(
+            associations.get("image/*").unwrap(),
+            &vec!["imgcat.desktop"]
+        );
     }
 
     #[test]
@@ -178,6 +239,21 @@ image/png=viewer.desktop;";
 
         let apps = mime_assoc.get_associations("application/unknown");
         assert!(apps.is_empty());
+    }
+
+    #[test]
+    fn test_get_associations_with_wildcard_fallback() {
+        let mut associations = HashMap::new();
+        associations.insert("image/*".to_string(), vec!["imgcat.desktop".to_string()]);
+        associations.insert("image/jpeg".to_string(), vec!["viewer.desktop".to_string()]);
+
+        let mime_assoc = MimeAssociations::with_associations(associations);
+
+        let apps = mime_assoc.get_associations("image/jpeg");
+        assert_eq!(
+            apps,
+            vec!["viewer.desktop".to_string(), "imgcat.desktop".to_string()]
+        );
     }
 
     #[test]
