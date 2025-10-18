@@ -265,9 +265,9 @@ mod tests {
     fn test_run_with_invalid_fuzzer() {
         let config = Config::default();
         let runner = FuzzyFinderRunner::new();
-        let _applications = vec![create_test_application()];
+        let applications = [create_test_application()];
 
-        let result = runner.run(&config, &_applications, "test.txt", "nonexistent");
+        let result = runner.run(&config, &applications, "test.txt", "nonexistent");
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -279,7 +279,6 @@ mod tests {
     fn test_run_command_construction() {
         // Test that we can construct the command without actually running it
         let config = Config::default();
-        let _applications = vec![create_test_application()];
 
         // We can't easily test the actual execution without mocking,
         // but we can test that the function handles the setup correctly

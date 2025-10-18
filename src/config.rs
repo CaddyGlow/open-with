@@ -348,8 +348,10 @@ mod tests {
 
     #[test]
     fn test_config_serialization() {
-        let mut config = Config::default();
-        config.app_launch_prefix = Some("flatpak run".to_string());
+        let config = Config {
+            app_launch_prefix: Some("flatpak run".to_string()),
+            ..Default::default()
+        };
 
         // Test serialization
         let toml_string = toml::to_string(&config).unwrap();

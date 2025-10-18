@@ -1836,17 +1836,9 @@ Exec=test";
         let args = create_test_args_json(Some(PathBuf::from("test.txt")));
         let _app = OpenWith::new(args).unwrap();
 
-        // Test the fuzzy finder detection logic
-        if which::which("fzf").is_ok() {
-            // fzf is available
-            assert!(true);
-        } else if which::which("fuzzel").is_ok() {
-            // fuzzel is available
-            assert!(true);
-        } else {
-            // No fuzzy finder available
-            assert!(true);
-        }
+        // Test the fuzzy finder detection logic without asserting on specific availability
+        let _ = which::which("fzf");
+        let _ = which::which("fuzzel");
     }
 
     #[test]
@@ -2142,15 +2134,9 @@ MimeType=text/plain;";
         // The result depends on what applications are available on the system
         // If applications are found, it should succeed (JSON output)
         // If no applications are found, it should fail with "No applications found"
-        match result {
-            Ok(()) => {
-                // JSON output succeeded - applications were found
-                assert!(true);
-            }
-            Err(e) => {
-                // Should fail with "No applications found" message
-                assert!(e.to_string().contains("No applications found"));
-            }
+        if let Err(e) = result {
+            // Should fail with "No applications found" message
+            assert!(e.to_string().contains("No applications found"));
         }
     }
 
@@ -2272,8 +2258,5 @@ MimeType=text/plain;";
         // Verify command was constructed (check args)
         let fuzzel_program = fuzzel_cmd.get_program();
         assert_eq!(fuzzel_program, "fuzzel");
-
-        // Test passes if we can construct the commands without errors
-        assert!(true);
     }
 }

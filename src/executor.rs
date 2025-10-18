@@ -195,15 +195,11 @@ mod tests {
     #[test]
     fn test_new_executor() {
         let _executor = ApplicationExecutor::new();
-        // Just verify it can be created
-        assert!(true);
     }
 
     #[test]
     fn test_default_executor() {
         let _executor = ApplicationExecutor::default();
-        // Just verify it can be created
-        assert!(true);
     }
 
     #[test]

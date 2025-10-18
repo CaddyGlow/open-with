@@ -309,25 +309,6 @@ mod tests {
         }
     }
 
-    fn create_test_application_entry(name: &str) -> ApplicationEntry {
-        ApplicationEntry {
-            name: name.to_string(),
-            exec: format!("{} %F", name.to_lowercase()),
-            desktop_file: PathBuf::from(format!(
-                "/usr/share/applications/{}.desktop",
-                name.to_lowercase()
-            )),
-            comment: Some(format!("Test application {}", name)),
-            icon: Some(format!("{}-icon", name.to_lowercase())),
-            is_xdg: false,
-            xdg_priority: -1,
-            is_default: false,
-            action_id: None,
-            requires_terminal: false,
-            is_terminal_emulator: false,
-        }
-    }
-
     #[test]
     fn test_new_application_finder() {
         let cache = Box::new(crate::cache::MemoryCache::new());
