@@ -86,7 +86,7 @@ impl MimeAssociations {
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         for (pattern, handlers) in entries {
-            if pattern == &mime_type {
+            if pattern == mime_type {
                 continue;
             }
 

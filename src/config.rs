@@ -4,17 +4,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SelectorProfileType {
+    #[default]
     Gui,
     Tui,
-}
-
-impl Default for SelectorProfileType {
-    fn default() -> Self {
-        SelectorProfileType::Gui
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

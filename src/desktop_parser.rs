@@ -181,15 +181,7 @@ impl DesktopFile {
         value
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
-            .map(|s| {
-                if s.eq_ignore_ascii_case("true") {
-                    true
-                } else if s.eq_ignore_ascii_case("false") {
-                    false
-                } else {
-                    false
-                }
-            })
+            .map(|s| s.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
     }
 
