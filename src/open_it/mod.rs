@@ -1,11 +1,12 @@
-use crate::application_finder::{ApplicationEntry, ApplicationFinder};
+#[cfg(test)]
+use crate::application_finder::ApplicationEntry;
+use crate::application_finder::ApplicationFinder;
 use crate::cache::DesktopCache;
 #[cfg(test)]
 use crate::cache::FileSystemCache;
 use crate::cli::OpenArgs;
 use crate::config;
 use crate::executor::ApplicationExecutor;
-use crate::fuzzy_finder::FuzzyFinderRunner;
 use crate::mime_associations::MimeAssociations;
 use crate::regex_handlers::RegexHandlerStore;
 use crate::selector::SelectorRunner;
@@ -29,7 +30,6 @@ use selection::LaunchContext;
 #[derive(Debug)]
 pub struct OpenIt {
     pub(crate) application_finder: ApplicationFinder,
-    pub(crate) fuzzy_finder_runner: FuzzyFinderRunner,
     pub(crate) selector_runner: SelectorRunner,
     pub(crate) executor: ApplicationExecutor,
     pub(crate) config: config::Config,
@@ -48,8 +48,8 @@ impl OpenIt {
             mut config,
         } = bootstrap::initialize(&args)?;
 
-        if let Some(enable_selector) = args.enable_selector {
-            config.selector.enable_selector = enable_selector;
+        if let Some(open_with) = args.open_with_override() {
+            config.selector.open_with = open_with;
         }
 
         if let Some(term_exec_args) = args.term_exec_args.clone() {
@@ -69,7 +69,6 @@ impl OpenIt {
 
         Ok(Self {
             application_finder,
-            fuzzy_finder_runner: FuzzyFinderRunner::new(),
             selector_runner: SelectorRunner::new(),
             executor,
             config,
@@ -85,19 +84,27 @@ impl OpenIt {
 
         let context = self.prepare_launch()?;
 
-        if !self.config.selector.enable_selector {
-            if context.first_is_regex_handler() {
-                info!("Selector disabled; launching regex handler directly");
-                return self.execute_application(&context.applications[0], &context.target);
-            }
-            return self.launch_with_fuzzy(&context);
-        }
-
-        if self.args.json || !io::stdout().is_terminal() {
+        let force_json =
+            self.args.json || (!io::stdout().is_terminal() && self.config.selector.open_with);
+        if force_json {
             return self.output_json(&context);
         }
 
-        if context.applications.len() == 1 && self.args.auto_open_single {
+        if !self.config.selector.open_with {
+            let first_app = &context.applications[0];
+            if context.first_is_regex_handler() {
+                info!("Selector disabled; launching regex handler directly");
+            } else {
+                info!(
+                    "Selector disabled; launching `{}` ({})",
+                    first_app.name,
+                    first_app.desktop_file.display()
+                );
+            }
+            return self.execute_application(first_app, &context.target);
+        }
+
+        if context.applications.len() == 1 {
             info!("Auto-opening the only available application");
             return self.execute_application(&context.applications[0], &context.target);
         }
@@ -115,10 +122,11 @@ impl OpenIt {
         let target = Self::resolve_launch_target(raw_target)?;
 
         if let Some(path) = target.as_path() {
-            if !path.is_file() {
-                anyhow::bail!("Path is not a file: {}", path.display());
+            if path.is_dir() {
+                info!("Directory: {}", path.display());
+            } else {
+                info!("File: {}", path.display());
             }
-            info!("File: {}", path.display());
         } else {
             info!("URI: {}", target.as_command_argument());
         }
@@ -226,7 +234,6 @@ mod tests {
     use crate::config::Config;
     use crate::desktop_parser::{DesktopEntry, DesktopFile};
     use crate::executor::ApplicationExecutor;
-    use crate::fuzzy_finder::FuzzyFinderRunner;
     use crate::regex_handlers::RegexHandlerStore;
     use crate::selector::SelectorRunner;
     use crate::target::LaunchTarget;
@@ -256,11 +263,96 @@ mod tests {
             build_info: false,
             generate_config: false,
             config: None,
-            auto_open_single: false,
-            enable_selector: None,
+            open_with: true,
+            no_open_with: false,
             selector_command: None,
             term_exec_args: None,
         }
+    }
+
+    #[cfg(unix)]
+    fn build_selector_test_environment(script_body: &str) -> (OpenIt, LaunchContext, TempDir) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let script_path = temp_dir.path().join("selector_script.sh");
+        fs::write(&script_path, script_body).unwrap();
+        let mut perms = fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).unwrap();
+
+        let mut config = Config::default();
+        config.selector.open_with = true;
+
+        let executor = ApplicationExecutor::with_options(
+            config.app_launch_prefix.clone(),
+            config.selector.term_exec_args.clone(),
+        );
+
+        let args = OpenArgs {
+            target: Some("dummy.txt".to_string()),
+            selector: SelectorKind::Auto,
+            json: false,
+            actions: false,
+            clear_cache: false,
+            verbose: false,
+            build_info: false,
+            generate_config: false,
+            config: None,
+            open_with: false,
+            no_open_with: false,
+            selector_command: Some(script_path.to_string_lossy().to_string()),
+            term_exec_args: None,
+        };
+
+        let applications = vec![
+            ApplicationEntry {
+                name: "Alpha".to_string(),
+                exec: "alpha %F".to_string(),
+                desktop_file: PathBuf::from("alpha.desktop"),
+                comment: None,
+                icon: None,
+                is_xdg: false,
+                xdg_priority: -1,
+                is_default: false,
+                action_id: None,
+                requires_terminal: false,
+                is_terminal_emulator: false,
+            },
+            ApplicationEntry {
+                name: "Beta".to_string(),
+                exec: "beta %F".to_string(),
+                desktop_file: PathBuf::from("beta.desktop"),
+                comment: None,
+                icon: None,
+                is_xdg: false,
+                xdg_priority: -1,
+                is_default: false,
+                action_id: None,
+                requires_terminal: false,
+                is_terminal_emulator: false,
+            },
+        ];
+
+        let context = LaunchContext::new(
+            LaunchTarget::File(PathBuf::from("dummy.txt")),
+            "text/plain".to_string(),
+            applications,
+        );
+
+        let open_with = OpenIt {
+            application_finder: ApplicationFinder::new(
+                Box::new(crate::cache::MemoryCache::new()),
+                MimeAssociations::with_associations(HashMap::new()),
+            ),
+            selector_runner: SelectorRunner::new(),
+            executor,
+            config,
+            regex_handlers: RegexHandlerStore::load(None).unwrap(),
+            args,
+        };
+
+        (open_with, context, temp_dir)
     }
 
     #[test]
@@ -322,8 +414,8 @@ mod tests {
             build_info: false,
             generate_config: false,
             config: None,
-            auto_open_single: false,
-            enable_selector: None,
+            open_with: false,
+            no_open_with: false,
             selector_command: None,
             term_exec_args: None,
         };
@@ -399,6 +491,13 @@ mod tests {
     }
 
     #[test]
+    fn mime_for_directory_target() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = LaunchTarget::File(temp_dir.path().to_path_buf());
+        assert_eq!(OpenIt::mime_for_target(&target), "inode/directory");
+    }
+
+    #[test]
     fn resolve_launch_target_with_file_uri() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("uri_test.txt");
@@ -426,8 +525,8 @@ mod tests {
             build_info: false,
             generate_config: false,
             config: None,
-            auto_open_single: false,
-            enable_selector: None,
+            open_with: false,
+            no_open_with: false,
             selector_command: None,
             term_exec_args: None,
         };
@@ -450,8 +549,8 @@ mod tests {
             build_info: false,
             generate_config: false,
             config: None,
-            auto_open_single: false,
-            enable_selector: None,
+            open_with: false,
+            no_open_with: false,
             selector_command: None,
             term_exec_args: None,
         };
@@ -482,8 +581,8 @@ mod tests {
             build_info: false,
             generate_config: false,
             config: None,
-            auto_open_single: false,
-            enable_selector: None,
+            open_with: false,
+            no_open_with: false,
             selector_command: None,
             term_exec_args: None,
         };
@@ -493,32 +592,27 @@ mod tests {
     }
 
     #[test]
-    fn run_with_directory_path_errors() {
+    fn run_with_directory_path_reports_missing_handlers() {
         let temp_dir = TempDir::new().unwrap();
 
         let args = OpenArgs {
             target: Some(temp_dir.path().to_string_lossy().to_string()),
             selector: SelectorKind::Auto,
-            json: false,
+            json: true,
             actions: false,
             clear_cache: false,
             verbose: false,
             build_info: false,
             generate_config: false,
             config: None,
-            auto_open_single: false,
-            enable_selector: None,
+            open_with: false,
+            no_open_with: true,
             selector_command: None,
             term_exec_args: None,
         };
 
         let app = OpenIt::new(args).unwrap();
-        let result = app.run();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Path is not a file"));
+        assert!(app.run().is_ok());
     }
 
     #[test]
@@ -537,8 +631,8 @@ mod tests {
             build_info: false,
             generate_config: false,
             config: None,
-            auto_open_single: false,
-            enable_selector: None,
+            open_with: false,
+            no_open_with: false,
             selector_command: None,
             term_exec_args: None,
         };
@@ -660,8 +754,8 @@ mod tests {
             build_info: false,
             generate_config: false,
             config: None,
-            auto_open_single: false,
-            enable_selector: None,
+            open_with: false,
+            no_open_with: false,
             selector_command: None,
             term_exec_args: None,
         };
@@ -671,6 +765,25 @@ mod tests {
         if let Err(e) = result {
             assert!(e.to_string().contains("No applications found"));
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn selector_cancellation_returns_ok_without_fallback() {
+        let (open_with, context, _temp_dir) =
+            build_selector_test_environment("#!/bin/sh\nexit 0\n");
+
+        assert!(open_with.run_selector_flow(&context).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn selector_error_propagates_without_fallback() {
+        let (open_with, context, _temp_dir) =
+            build_selector_test_environment("#!/bin/sh\nprintf \"Unknown\"\n");
+
+        let result = open_with.run_selector_flow(&context);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -718,8 +831,8 @@ mod tests {
             build_info: false,
             generate_config: false,
             config: None,
-            auto_open_single: true,
-            enable_selector: Some(false),
+            open_with: false,
+            no_open_with: true,
             selector_command: None,
             term_exec_args: None,
         };
@@ -779,7 +892,6 @@ mod tests {
 
         let open_with = OpenIt {
             application_finder,
-            fuzzy_finder_runner: FuzzyFinderRunner::new(),
             selector_runner: SelectorRunner::new(),
             executor,
             config,
@@ -828,7 +940,6 @@ mod tests {
 
         let open_with = OpenIt {
             application_finder,
-            fuzzy_finder_runner: FuzzyFinderRunner::new(),
             selector_runner: SelectorRunner::new(),
             executor,
             config,
@@ -856,7 +967,6 @@ mod tests {
 
         let open_with = OpenIt {
             application_finder,
-            fuzzy_finder_runner: FuzzyFinderRunner::new(),
             selector_runner: SelectorRunner::new(),
             executor,
             config,

@@ -1,4 +1,4 @@
-use clap::{Args as ClapArgs, Parser, Subcommand};
+use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
@@ -78,13 +78,13 @@ pub struct OpenArgs {
     #[arg(short = 'c', long)]
     pub config: Option<PathBuf>,
 
-    /// Automatically open if only one application is available (skip picker)
-    #[arg(long)]
-    pub auto_open_single: bool,
+    /// Force interactive selector usage (overrides config open-with setting).
+    #[arg(long, action = ArgAction::SetTrue, overrides_with = "no_open_with")]
+    pub open_with: bool,
 
-    /// Override selector enablement (true/false)
-    #[arg(long)]
-    pub enable_selector: Option<bool>,
+    /// Disable interactive selector usage (overrides config open-with setting).
+    #[arg(long, action = ArgAction::SetTrue, overrides_with = "open_with")]
+    pub no_open_with: bool,
 
     /// Override selector command (e.g. `rofi -dmenu`)
     #[arg(long = "selector-command")]
@@ -198,6 +198,16 @@ impl OpenArgs {
     #[allow(dead_code)]
     pub fn get_target(&self) -> Option<&str> {
         self.target.as_deref()
+    }
+
+    pub fn open_with_override(&self) -> Option<bool> {
+        if self.open_with {
+            Some(true)
+        } else if self.no_open_with {
+            Some(false)
+        } else {
+            None
+        }
     }
 }
 

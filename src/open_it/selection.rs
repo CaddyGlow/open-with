@@ -41,21 +41,6 @@ impl LaunchContext {
 }
 
 impl OpenIt {
-    pub(super) fn launch_with_fuzzy(&self, context: &LaunchContext) -> Result<()> {
-        if context.applications.len() == 1
-            && (self.args.auto_open_single || context.first_is_regex_handler())
-        {
-            info!("Auto-opening the only available application");
-            return self.execute_application(&context.applications[0], &context.target);
-        }
-
-        let display_name = context.target.display_name();
-        if let Some(index) = self.run_fuzzy_finder(&context.applications, display_name.as_ref())? {
-            self.execute_application(&context.applications[index], &context.target)?;
-        }
-        Ok(())
-    }
-
     pub(super) fn run_selector_flow(&self, context: &LaunchContext) -> Result<()> {
         let (selector_cmd, selector_args) = self.build_selector_command(context)?;
         let log_command = if selector_args.is_empty() {
@@ -81,15 +66,15 @@ impl OpenIt {
                 self.execute_application(&context.applications[index], &context.target)
             }
             Ok(None) => {
-                info!("Selector produced no choice; falling back to fuzzy finder");
-                self.launch_with_fuzzy(context)
+                info!("Selector produced no choice; exiting without launching application");
+                Ok(())
             }
             Err(err) => {
                 info!(
-                    "Selector command failed ({}); falling back to fuzzy finder",
+                    "Selector command failed ({}); no fallback fuzzy finder will run",
                     err
                 );
-                self.launch_with_fuzzy(context)
+                Err(err)
             }
         }
     }
@@ -112,39 +97,6 @@ impl OpenIt {
                 }
             }
         }
-    }
-
-    fn run_fuzzy_finder(
-        &self,
-        applications: &[ApplicationEntry],
-        file_name: &str,
-    ) -> Result<Option<usize>> {
-        let preferred_type = self.preferred_selector_profile_type();
-        let profile_id = match &self.args.selector {
-            SelectorKind::Auto => self
-                .fuzzy_finder_runner
-                .detect_available(&self.config, preferred_type)?,
-            SelectorKind::Named(name) => {
-                let requested = SelectorProfileId::from(name.as_str());
-                if self
-                    .config
-                    .get_selector_profile(requested.as_ref())
-                    .is_some()
-                {
-                    requested
-                } else {
-                    info!(
-                        "Selector profile `{}` not found; falling back to auto fuzzy detection",
-                        name
-                    );
-                    self.fuzzy_finder_runner
-                        .detect_available(&self.config, preferred_type)?
-                }
-            }
-        };
-
-        self.fuzzy_finder_runner
-            .run(&self.config, applications, file_name, &profile_id)
     }
 
     fn selector_command_from_profile(

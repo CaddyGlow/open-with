@@ -26,9 +26,15 @@ pub(super) fn resolve_launch_target(raw: &str) -> Result<LaunchTarget> {
 
 pub(super) fn mime_for_target(target: &LaunchTarget) -> String {
     match target {
-        LaunchTarget::File(path) => mime_guess::from_path(path)
-            .first_or_octet_stream()
-            .to_string(),
+        LaunchTarget::File(path) => {
+            if path.is_dir() {
+                "inode/directory".to_string()
+            } else {
+                mime_guess::from_path(path)
+                    .first_or_octet_stream()
+                    .to_string()
+            }
+        }
         LaunchTarget::Uri(uri) => format!("x-scheme-handler/{}", uri.scheme()),
     }
 }

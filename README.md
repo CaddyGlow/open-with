@@ -68,7 +68,6 @@ Options:
       --build-info           Show build information
       --generate-config      Generate default configuration file
       --config <CONFIG>      Path to configuration file
-      --auto-open-single     Automatically open when only one application is available
   -h, --help                 Print help
   -V, --version              Print version
 ```
@@ -181,7 +180,7 @@ openit --generate-config
 This creates `~/.config/openit/config.toml` with the following structure:
 
 ```toml
-enable_selector = false
+open_with = true
 term_exec_args = "-e"
 expand_wildcards = false
 app_launch_prefix = null

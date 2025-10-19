@@ -86,7 +86,8 @@ impl Default for SelectorDefaults {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SelectorSettings {
-    pub enable_selector: bool,
+    #[serde(alias = "enable_selector")]
+    pub open_with: bool,
     #[serde(rename = "default")]
     pub defaults: SelectorDefaults,
     pub term_exec_args: Option<String>,
@@ -96,7 +97,7 @@ pub struct SelectorSettings {
 impl Default for SelectorSettings {
     fn default() -> Self {
         Self {
-            enable_selector: false,
+            open_with: true,
             defaults: SelectorDefaults::default(),
             term_exec_args: Some("-e".into()),
             expand_wildcards: false,
@@ -384,7 +385,7 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
 
-        assert!(!config.selector.enable_selector);
+        assert!(config.selector.open_with);
         assert_eq!(config.selector.defaults.gui.as_str(), "fuzzel");
         assert_eq!(config.selector.defaults.tui.as_str(), "fzf");
         // Should have default fzf and fuzzel configs
