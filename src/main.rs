@@ -43,7 +43,7 @@ mod tests {
     use crate::application_finder::{ApplicationEntry, ApplicationFinder};
     use crate::cache::DesktopCache;
     use crate::desktop_parser::DesktopFile;
-    use crate::executor::ApplicationExecutor;
+    use crate::executor::{ApplicationExecutor, LaunchDisposition};
     use crate::mime_associations::MimeAssociations;
     use crate::target::LaunchTarget;
     use crate::test_support::create_test_desktop_file;
@@ -310,7 +310,7 @@ Exec=test";
         let target = LaunchTarget::File(test_file);
 
         let executor = ApplicationExecutor::new();
-        let result = executor.execute(&app, &target, None);
+        let result = executor.execute(&app, &target, None, LaunchDisposition::Detached);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Empty exec command");
     }

@@ -60,6 +60,10 @@ impl OpenIt {
             };
         }
 
+        if let Some(terminal_mode) = args.terminal_mode_override() {
+            config.terminal_execution = terminal_mode;
+        }
+
         let application_finder = ApplicationFinder::new(desktop_cache, MimeAssociations::load());
 
         let executor = ApplicationExecutor::with_options(
@@ -267,6 +271,7 @@ mod tests {
             no_open_with: false,
             selector_command: None,
             term_exec_args: None,
+            terminal_mode: None,
         }
     }
 
@@ -303,6 +308,7 @@ mod tests {
             no_open_with: false,
             selector_command: Some(script_path.to_string_lossy().to_string()),
             term_exec_args: None,
+            terminal_mode: None,
         };
 
         let applications = vec![
@@ -418,6 +424,7 @@ mod tests {
             no_open_with: false,
             selector_command: None,
             term_exec_args: None,
+            terminal_mode: None,
         };
 
         let _ = env_logger::builder()
@@ -529,6 +536,7 @@ mod tests {
             no_open_with: false,
             selector_command: None,
             term_exec_args: None,
+            terminal_mode: None,
         };
 
         let app = OpenIt::new(args).unwrap();
@@ -553,6 +561,7 @@ mod tests {
             no_open_with: false,
             selector_command: None,
             term_exec_args: None,
+            terminal_mode: None,
         };
 
         let app = OpenIt::new(args).unwrap();
@@ -585,6 +594,7 @@ mod tests {
             no_open_with: false,
             selector_command: None,
             term_exec_args: None,
+            terminal_mode: None,
         };
 
         let app = OpenIt::new(args).unwrap();
@@ -609,6 +619,7 @@ mod tests {
             no_open_with: true,
             selector_command: None,
             term_exec_args: None,
+            terminal_mode: None,
         };
 
         let app = OpenIt::new(args).unwrap();
@@ -635,6 +646,7 @@ mod tests {
             no_open_with: false,
             selector_command: None,
             term_exec_args: None,
+            terminal_mode: None,
         };
 
         let app = OpenIt::new(args).unwrap();
@@ -758,6 +770,7 @@ mod tests {
             no_open_with: false,
             selector_command: None,
             term_exec_args: None,
+            terminal_mode: None,
         };
 
         let app = OpenIt::new(args).unwrap();
@@ -835,6 +848,7 @@ mod tests {
             no_open_with: true,
             selector_command: None,
             term_exec_args: None,
+            terminal_mode: None,
         };
 
         let app = OpenIt::new(args).unwrap();

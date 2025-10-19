@@ -1,4 +1,4 @@
-use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand};
+use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
@@ -26,6 +26,12 @@ impl SelectorKind {
             Ok(SelectorKind::Named(trimmed.to_string()))
         }
     }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum TerminalModeArg {
+    Current,
+    Launcher,
 }
 
 #[derive(Parser, Debug)]
@@ -93,6 +99,10 @@ pub struct OpenArgs {
     /// Override terminal exec args passed to selector commands
     #[arg(long = "term-exec-args")]
     pub term_exec_args: Option<String>,
+
+    /// Override how terminal applications are launched (current terminal or external launcher)
+    #[arg(long = "terminal-mode", value_enum)]
+    pub terminal_mode: Option<TerminalModeArg>,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -207,6 +217,19 @@ impl OpenArgs {
             Some(false)
         } else {
             None
+        }
+    }
+
+    pub fn terminal_mode_override(&self) -> Option<crate::config::TerminalExecution> {
+        self.terminal_mode.map(Into::into)
+    }
+}
+
+impl From<TerminalModeArg> for crate::config::TerminalExecution {
+    fn from(value: TerminalModeArg) -> Self {
+        match value {
+            TerminalModeArg::Current => crate::config::TerminalExecution::Current,
+            TerminalModeArg::Launcher => crate::config::TerminalExecution::Launcher,
         }
     }
 }

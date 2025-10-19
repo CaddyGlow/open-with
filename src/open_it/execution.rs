@@ -1,6 +1,7 @@
 use super::OpenIt;
 use crate::application_finder::{ApplicationEntry, ApplicationSource};
-use crate::executor::ApplicationExecutor;
+use crate::config::TerminalExecution;
+use crate::executor::{ApplicationExecutor, LaunchDisposition};
 use crate::regex_handlers::RegexHandler;
 use crate::target::LaunchTarget;
 use anyhow::{Context, Result};
@@ -14,11 +15,24 @@ impl OpenIt {
         target: &LaunchTarget,
     ) -> Result<()> {
         if app.requires_terminal {
-            let launcher = self.resolve_terminal_launcher()?;
-            self.executor
-                .execute(app, target, Some(launcher.as_slice()))
+            match self.config.terminal_execution {
+                TerminalExecution::Current => {
+                    self.executor
+                        .execute(app, target, None, LaunchDisposition::InheritTerminal)
+                }
+                TerminalExecution::Launcher => {
+                    let launcher = self.resolve_terminal_launcher()?;
+                    self.executor.execute(
+                        app,
+                        target,
+                        Some(launcher.as_slice()),
+                        LaunchDisposition::Detached,
+                    )
+                }
+            }
         } else {
-            self.executor.execute(app, target, None)
+            self.executor
+                .execute(app, target, None, LaunchDisposition::Detached)
         }
     }
 

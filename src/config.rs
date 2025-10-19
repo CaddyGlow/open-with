@@ -114,6 +114,19 @@ impl SelectorSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TerminalExecution {
+    Current,
+    Launcher,
+}
+
+impl Default for TerminalExecution {
+    fn default() -> Self {
+        Self::Launcher
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SelectorProfile {
@@ -143,6 +156,7 @@ pub struct Config {
     pub header_template: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_launch_prefix: Option<String>,
+    pub terminal_execution: TerminalExecution,
 }
 
 impl Default for Config {
@@ -225,6 +239,7 @@ impl Default for Config {
             prompt_template: "Open '{file|truncate:20}' with: ".to_string(),
             header_template: "★=Default ▶=XDG Associated  =Available".to_string(),
             app_launch_prefix: None,
+            terminal_execution: TerminalExecution::default(),
         }
     }
 }
@@ -402,6 +417,7 @@ mod tests {
         assert_eq!(fuzzel_config.selector_type, SelectorProfileType::Gui);
 
         assert!(config.app_launch_prefix.is_none());
+        assert_eq!(config.terminal_execution, TerminalExecution::Launcher);
     }
 
     #[test]
@@ -423,6 +439,7 @@ mod tests {
             deserialized.selector_profiles.len()
         );
         assert_eq!(config.app_launch_prefix, deserialized.app_launch_prefix);
+        assert_eq!(config.terminal_execution, deserialized.terminal_execution);
     }
 
     #[test]

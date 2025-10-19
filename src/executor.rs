@@ -5,6 +5,12 @@ use log::info;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchDisposition {
+    Detached,
+    InheritTerminal,
+}
+
 #[derive(Debug)]
 pub struct ApplicationExecutor {
     app_launch_prefix: Option<String>,
@@ -48,10 +54,25 @@ impl ApplicationExecutor {
         app: &ApplicationEntry,
         target: &LaunchTarget,
         terminal_launcher: Option<&[String]>,
+        disposition: LaunchDisposition,
     ) -> Result<()> {
-        let prepared_command =
-            self.build_command(app, target, terminal_launcher.map(|parts| parts.to_vec()))?;
-        Self::spawn_detached(prepared_command, target)
+        let launcher = match disposition {
+            LaunchDisposition::Detached => terminal_launcher.map(|parts| parts.to_vec()),
+            LaunchDisposition::InheritTerminal => {
+                if terminal_launcher.is_some() {
+                    anyhow::bail!(
+                        "Terminal launcher cannot be used when inheriting the current terminal"
+                    );
+                }
+                None
+            }
+        };
+
+        let prepared_command = self.build_command(app, target, launcher)?;
+        match disposition {
+            LaunchDisposition::Detached => Self::spawn_detached(prepared_command, target),
+            LaunchDisposition::InheritTerminal => Self::exec_in_place(prepared_command, target),
+        }
     }
 
     pub fn prepare_command(exec: &str, target: &LaunchTarget) -> Result<Vec<String>> {
@@ -161,6 +182,26 @@ impl ApplicationExecutor {
             .context("Failed to execute application")?;
 
         Ok(())
+    }
+
+    fn exec_in_place(command_parts: Vec<String>, target: &LaunchTarget) -> Result<()> {
+        if command_parts.is_empty() {
+            return Err(anyhow::anyhow!("Empty command"));
+        }
+
+        info!(
+            "Replacing process with: {} \"{}\"",
+            command_parts.join(" "),
+            target.as_command_argument()
+        );
+
+        let mut cmd = Command::new(&command_parts[0]);
+        for part in &command_parts[1..] {
+            cmd.arg(part);
+        }
+
+        let err = cmd.exec();
+        Err(anyhow::anyhow!("Failed to exec application: {err}"))
     }
 }
 
@@ -294,9 +335,46 @@ mod tests {
         let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
 
         let executor = ApplicationExecutor::new();
-        let result = executor.execute(&app, &target, None);
+        let result = executor.execute(&app, &target, None, LaunchDisposition::Detached);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Empty exec command");
+    }
+
+    #[test]
+    fn test_execute_inherit_terminal_rejects_launcher() {
+        let app = create_test_application("echo %f");
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let executor = ApplicationExecutor::new();
+        let launcher = vec!["kitty".to_string()];
+
+        let result = executor.execute(
+            &app,
+            &target,
+            Some(launcher.as_slice()),
+            LaunchDisposition::InheritTerminal,
+        );
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Terminal launcher cannot be used"));
+    }
+
+    #[test]
+    fn test_execute_inherit_terminal_missing_command() {
+        let mut app = create_test_application("/definitely-missing-command");
+        app.requires_terminal = true;
+        let target = LaunchTarget::File(PathBuf::from("/home/user/test.txt"));
+        let executor = ApplicationExecutor::new();
+
+        let result = executor.execute(&app, &target, None, LaunchDisposition::InheritTerminal);
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to exec application"));
     }
 
     #[test]

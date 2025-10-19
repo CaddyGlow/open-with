@@ -68,6 +68,8 @@ Options:
       --build-info           Show build information
       --generate-config      Generate default configuration file
       --config <CONFIG>      Path to configuration file
+      --terminal-mode <TERMINAL_MODE>
+                             Override how terminal applications launch (`current` for in-place, `launcher` for external emulator)
   -h, --help                 Print help
   -V, --version              Print version
 ```
@@ -183,6 +185,7 @@ This creates `~/.config/openit/config.toml` with the following structure:
 open_with = true
 term_exec_args = "-e"
 expand_wildcards = false
+terminal_execution = "launcher"
 app_launch_prefix = null
 
 [default]
@@ -267,6 +270,9 @@ term_exec_args = ""
 ```
 
 When `term_exec_args` is an empty string or the key is omitted, no additional arguments are added before the target command.
+
+Set `terminal_execution = "current"` to run terminal applications inside the invoking shell by replacing the `openit` process via `exec`.
+This is equivalent to launching `openit` with `--terminal-mode current`. Keep the value at `"launcher"` (or pass `--terminal-mode launcher`) to continue spawning a separate terminal emulator.
 
 ### Environment Variables
 
