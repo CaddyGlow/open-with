@@ -1,12 +1,10 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
-use itertools::Itertools;
-use std::fs;
-use std::path::Path;
 
 mod application_finder;
 mod cache;
 mod cli;
+mod commands;
 mod config;
 mod desktop_parser;
 mod executor;
@@ -26,325 +24,7 @@ pub mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
 
-use application_finder::ApplicationFinder;
-use cli::{Cli, Command, OpenArgs};
-use mime_associations::MimeAssociations;
-use mimeapps::MimeApps;
-use open_it::OpenIt;
-
-fn handle_command(command: Command) -> Result<()> {
-    match command {
-        Command::Open(_) => unreachable!("open subcommand should be handled separately"),
-        Command::Set(args) => {
-            let mime = normalize_mime_input(&args.mime)?;
-            ensure_handler_exists(&args.handler)?;
-            let mut apps = MimeApps::load_from_disk(None)?;
-            apps.set_handler(&mime, vec![args.handler.clone()], args.expand_wildcards);
-            apps.save_to_disk(None)?;
-            println!("Set default handler for {mime} -> {}", args.handler);
-            Ok(())
-        }
-        Command::Add(args) => {
-            let mime = normalize_mime_input(&args.mime)?;
-            ensure_handler_exists(&args.handler)?;
-            let mut apps = MimeApps::load_from_disk(None)?;
-            apps.add_handler(&mime, args.handler.clone(), args.expand_wildcards);
-            apps.save_to_disk(None)?;
-            println!("Added handler {} for {}", args.handler, mime);
-            Ok(())
-        }
-        Command::Remove(args) => {
-            let mime = normalize_mime_input(&args.mime)?;
-            let mut apps = MimeApps::load_from_disk(None)?;
-            apps.remove_handler(&mime, Some(args.handler.as_str()), args.expand_wildcards);
-            apps.save_to_disk(None)?;
-            println!("Removed handler {} from {}", args.handler, mime);
-            Ok(())
-        }
-        Command::Unset(args) => {
-            let mime = normalize_mime_input(&args.mime)?;
-            let mut apps = MimeApps::load_from_disk(None)?;
-            apps.remove_handler(&mime, None, args.expand_wildcards);
-            apps.save_to_disk(None)?;
-            println!("Unset handlers for {}", mime);
-            Ok(())
-        }
-        Command::List(args) => {
-            let apps = MimeApps::load_from_disk(None)?;
-            if args.json {
-                let payload = serde_json::json!({
-                    "default_apps": apps
-                        .default_apps()
-                        .iter()
-                        .map(|(mime, handlers)| {
-                            serde_json::json!({
-                                "mime": mime,
-                                "handlers": handlers.iter().cloned().collect::<Vec<_>>(),
-                            })
-                        })
-                        .collect::<Vec<_>>(),
-                    "added_associations": apps
-                        .added_associations()
-                        .iter()
-                        .map(|(mime, handlers)| {
-                            serde_json::json!({
-                                "mime": mime,
-                                "handlers": handlers.iter().cloned().collect::<Vec<_>>(),
-                            })
-                        })
-                        .collect::<Vec<_>>(),
-                });
-
-                println!("{}", serde_json::to_string_pretty(&payload)?);
-            } else {
-                for (mime, handlers) in apps.default_apps() {
-                    let joined = handlers.iter().map(|h| h.as_str()).join("; ");
-                    println!("{mime}: {joined}");
-                }
-            }
-            Ok(())
-        }
-        Command::Get(args) => {
-            use std::collections::BTreeMap;
-            use wildmatch::WildMatch;
-
-            let pattern = normalize_mime_input(&args.mime)?;
-            let desktop_cache = OpenIt::load_desktop_cache();
-            let mime_associations = MimeAssociations::load();
-            let application_finder = ApplicationFinder::new(desktop_cache, mime_associations);
-
-            // Check if pattern contains wildcard
-            if pattern.contains('*') {
-                // Collect all unique MIME types from desktop files
-                let all_mime_types: std::collections::HashSet<String> =
-                    application_finder.all_mime_types().into_iter().collect();
-
-                let matcher = WildMatch::new(&pattern);
-                let matching_mimes: Vec<String> = all_mime_types
-                    .into_iter()
-                    .filter(|mime| matcher.matches(mime))
-                    .collect();
-
-                if args.json {
-                    let mut results = BTreeMap::new();
-                    for mime in &matching_mimes {
-                        let applications = application_finder.find_for_mime(mime, args.actions);
-                        if !applications.is_empty() {
-                            results.insert(mime.clone(), applications);
-                        }
-                    }
-                    let output = serde_json::json!({
-                        "pattern": pattern,
-                        "matching_mimes": matching_mimes,
-                        "results": results,
-                    });
-                    println!("{}", serde_json::to_string_pretty(&output)?);
-                } else {
-                    println!("Pattern: {}", pattern);
-                    println!("Matching MIME types: {}", matching_mimes.len());
-
-                    if matching_mimes.is_empty() {
-                        println!("No MIME types match this pattern.");
-                    } else {
-                        for mime in matching_mimes {
-                            let applications =
-                                application_finder.find_for_mime(&mime, args.actions);
-                            if applications.is_empty() {
-                                continue;
-                            }
-
-                            println!("\n{} ({} applications):", mime, applications.len());
-                            for app in &applications {
-                                let mut prefix = "  ";
-                                if app.is_default {
-                                    prefix = "★ ";
-                                } else if app.is_xdg {
-                                    prefix = "▶ ";
-                                }
-                                print!("  {}{}", prefix, app.name);
-                                if let Some(action_id) = &app.action_id {
-                                    print!(" [action: {}]", action_id);
-                                }
-                                println!();
-                            }
-                        }
-                        println!("\nLegend: ★=Default  ▶=XDG Associated  (space)=Available");
-                    }
-                }
-            } else {
-                // No wildcard - show applications for a single MIME type
-                let applications = application_finder.find_for_mime(&pattern, args.actions);
-
-                if args.json {
-                    let xdg_associations: Vec<String> = vec![];
-                    let output = serde_json::json!({
-                        "mimetype": pattern,
-                        "xdg_associations": xdg_associations,
-                        "applications": applications,
-                    });
-                    println!("{}", serde_json::to_string_pretty(&output)?);
-                } else {
-                    println!("MIME type: {}", pattern);
-                    if applications.is_empty() {
-                        println!("No applications found for this MIME type.");
-                    } else {
-                        println!("\nAvailable applications ({}):", applications.len());
-                        for (i, app) in applications.iter().enumerate() {
-                            let mut prefix = "  ";
-                            if app.is_default {
-                                prefix = "★ ";
-                            } else if app.is_xdg {
-                                prefix = "▶ ";
-                            }
-
-                            print!("{}{}", prefix, app.name);
-                            if let Some(action_id) = &app.action_id {
-                                print!(" [action: {}]", action_id);
-                            }
-                            println!();
-
-                            if let Some(comment) = &app.comment {
-                                println!("    {}", comment);
-                            }
-                            println!("    Exec: {}", app.exec);
-                            println!("    Desktop file: {}", app.desktop_file.display());
-
-                            if i < applications.len() - 1 {
-                                println!();
-                            }
-                        }
-                        println!("\nLegend: ★=Default  ▶=XDG Associated  (space)=Available");
-                    }
-                }
-            }
-            Ok(())
-        }
-        Command::Completions(args) => {
-            let mut command = Cli::command();
-            let shell = args.shell;
-            let bin_name = args.bin_name;
-
-            if let Some(path) = args.output {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let mut file = fs::File::create(&path)?;
-                clap_complete::generate(shell, &mut command, bin_name.clone(), &mut file);
-                println!("Generated {shell} completions at {}", path.display());
-            } else {
-                let mut stdout = std::io::stdout();
-                clap_complete::generate(shell, &mut command, bin_name, &mut stdout);
-            }
-
-            Ok(())
-        }
-    }
-}
-
-fn normalize_mime_input(input: &str) -> Result<String> {
-    let trimmed = input.trim();
-
-    if trimmed.contains('*') {
-        return Ok(trimmed.to_string());
-    }
-
-    if let Some((type_part_raw, subtype_raw)) = trimmed.split_once('/') {
-        let type_part = type_part_raw.trim().to_ascii_lowercase();
-        let subtype = subtype_raw.trim().to_ascii_lowercase();
-
-        if subtype.is_empty() {
-            anyhow::bail!("Invalid MIME type: {}", input);
-        }
-
-        if let Some(guess) = mime_guess::from_ext(subtype.as_str()).first() {
-            if guess.type_().as_str() == type_part {
-                return Ok(guess.essence_str().to_string());
-            }
-        }
-
-        let candidate = format!("{type_part}/{subtype}");
-        if let Ok(parsed) = candidate.parse::<mime::Mime>() {
-            return Ok(parsed.essence_str().to_string());
-        }
-
-        anyhow::bail!("Invalid MIME type: {}", input);
-    }
-
-    let normalized = trimmed.trim_start_matches('.');
-    mime_guess::from_ext(normalized)
-        .first()
-        .map(|mime| mime.essence_str().to_string())
-        .ok_or_else(|| anyhow::anyhow!("Unable to resolve MIME type for extension: {}", input))
-}
-
-fn ensure_handler_exists(handler: &str) -> Result<()> {
-    if should_skip_handler_validation() {
-        return Ok(());
-    }
-
-    if handler.trim().is_empty() {
-        anyhow::bail!("Handler identifier cannot be empty");
-    }
-
-    let path = Path::new(handler);
-    if (path.is_absolute() || handler.contains('/')) && path.exists() {
-        return Ok(());
-    }
-
-    let cache = OpenIt::load_desktop_cache();
-    let finder = ApplicationFinder::new(cache, MimeAssociations::default());
-
-    if finder.find_desktop_file(handler).is_none() {
-        anyhow::bail!(
-            "Desktop handler `{}` not found in available applications",
-            handler
-        );
-    }
-
-    Ok(())
-}
-
-fn should_skip_handler_validation() -> bool {
-    cfg!(test) && std::env::var("OPEN_WITH_SKIP_HANDLER_VALIDATION").is_ok()
-}
-
-fn run_open(open: OpenArgs) -> Result<()> {
-    if open.build_info {
-        cli::show_build_info();
-        return Ok(());
-    }
-
-    if open.generate_config {
-        let config = config::Config::default();
-        if let Some(custom_path) = &open.config {
-            if let Some(parent) = custom_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let toml_string = toml::to_string_pretty(&config)?;
-            fs::write(custom_path, toml_string)?;
-            println!(
-                "Generated default configuration at: {}",
-                custom_path.display()
-            );
-        } else {
-            config.save()?;
-            println!(
-                "Generated default configuration at: {}",
-                config::Config::config_path().display()
-            );
-        }
-        return Ok(());
-    }
-
-    if open.verbose {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    } else {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-    }
-
-    let app = OpenIt::new(open)?;
-    app.run()
-}
+use cli::Cli;
 
 fn main() -> Result<()> {
     clap_complete::CompleteEnv::with_factory(|| Cli::command().name("openit"))
@@ -352,23 +32,22 @@ fn main() -> Result<()> {
         .complete();
 
     let cli = Cli::parse();
-
-    match cli.command {
-        Command::Open(open) => run_open(open),
-        command => handle_command(command),
-    }
+    commands::dispatch(cli.command)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application_finder::ApplicationEntry;
+    use crate::application_finder::{ApplicationEntry, ApplicationFinder};
     use crate::cache::{DesktopCache, FileSystemCache};
-    use crate::cli::{EditArgs, RemoveArgs, SelectorKind, UnsetArgs};
+    use crate::cli::{Command, EditArgs, OpenArgs, RemoveArgs, SelectorKind, UnsetArgs};
+    use crate::commands;
+    use crate::commands::normalize_mime_input;
     use crate::config::Config;
     use crate::desktop_parser::{DesktopEntry, DesktopFile};
     use crate::executor::ApplicationExecutor;
     use crate::fuzzy_finder::FuzzyFinderRunner;
+    use crate::mime_associations::MimeAssociations;
+    use crate::open_it::OpenIt;
     use crate::regex_handlers::RegexHandlerStore;
     use crate::selector::SelectorRunner;
     use crate::target::LaunchTarget;
@@ -605,7 +284,7 @@ mod tests {
 
         let _validation = ValidationEnvGuard::enable();
 
-        handle_command(Command::Set(EditArgs {
+        commands::dispatch(Command::Set(EditArgs {
             mime: "text/plain".into(),
             handler: "helix.desktop".into(),
             expand_wildcards: false,
@@ -616,7 +295,7 @@ mod tests {
         let contents = fs::read_to_string(&config_path).unwrap();
         assert!(contents.contains("text/plain=helix.desktop;"));
 
-        handle_command(Command::Add(EditArgs {
+        commands::dispatch(Command::Add(EditArgs {
             mime: "text/plain".into(),
             handler: "code.desktop".into(),
             expand_wildcards: false,
@@ -626,7 +305,7 @@ mod tests {
         let contents = fs::read_to_string(&config_path).unwrap();
         assert!(contents.contains("text/plain=helix.desktop;code.desktop;"));
 
-        handle_command(Command::Unset(UnsetArgs {
+        commands::dispatch(Command::Unset(UnsetArgs {
             mime: "text/plain".into(),
             expand_wildcards: false,
         }))
@@ -644,21 +323,21 @@ mod tests {
 
         let _validation = ValidationEnvGuard::enable();
 
-        handle_command(Command::Set(EditArgs {
+        commands::dispatch(Command::Set(EditArgs {
             mime: "text/plain".into(),
             handler: "helix.desktop".into(),
             expand_wildcards: false,
         }))
         .unwrap();
 
-        handle_command(Command::Add(EditArgs {
+        commands::dispatch(Command::Add(EditArgs {
             mime: "text/plain".into(),
             handler: "code.desktop".into(),
             expand_wildcards: false,
         }))
         .unwrap();
 
-        handle_command(Command::Remove(RemoveArgs {
+        commands::dispatch(Command::Remove(RemoveArgs {
             mime: "text/plain".into(),
             handler: "helix.desktop".into(),
             expand_wildcards: false,
@@ -678,7 +357,7 @@ mod tests {
         let temp_config = TempDir::new().unwrap();
         let _guard = ConfigEnvGuard::set(temp_config.path());
 
-        let result = handle_command(Command::Add(EditArgs {
+        let result = commands::dispatch(Command::Add(EditArgs {
             mime: "text/plain".into(),
             handler: "nonexistent.desktop".into(),
             expand_wildcards: false,
