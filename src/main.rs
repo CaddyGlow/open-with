@@ -35,7 +35,7 @@ fn main() -> Result<()> {
         .complete();
 
     let cli = Cli::parse();
-    commands::dispatch(cli.command)
+    commands::dispatch(cli.into_command())
 }
 #[cfg(test)]
 mod tests {

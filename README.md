@@ -64,7 +64,7 @@ Options:
   -j, --json                 Output JSON instead of interactive mode
   -a, --actions              Show desktop actions as separate entries
       --clear-cache          Clear the desktop file cache
-  -v, --verbose              Verbose output
+  -v, --verbose              Increase logging verbosity (-v = info, -vv = debug)
       --build-info           Show build information
       --generate-config      Generate default configuration file
       --config <CONFIG>      Path to configuration file
@@ -305,7 +305,7 @@ cargo build --release
 cargo test
 
 # Run with logging
-RUST_LOG=debug cargo run -- file.txt --verbose
+cargo run -- file.txt -vv
 ```
 
 ## Architecture

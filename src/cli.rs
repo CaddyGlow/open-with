@@ -40,11 +40,29 @@ pub enum TerminalModeArg {
     version = crate::built_info::PKG_VERSION,
     about = "Enhanced file opener with XDG MIME support",
     long_about = None,
-    subcommand_precedence_over_arg = true
+    args_conflicts_with_subcommands = true,
+    subcommand_precedence_over_arg = true,
+    propagate_version = true
 )]
 pub struct Cli {
+    /// Default invocation arguments (when no subcommand is supplied).
+    #[command(flatten)]
+    pub open: OpenArgs,
+
+    /// Optional subcommand for explicit operations.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
+}
+
+impl Cli {
+    /// Convert parsed CLI data into a concrete command to execute.
+    pub fn into_command(self) -> Command {
+        match self.command {
+            Some(Command::Open(args)) => Command::Open(args),
+            Some(other) => other,
+            None => Command::Open(self.open),
+        }
+    }
 }
 
 #[derive(ClapArgs, Debug, Clone)]
@@ -68,9 +86,9 @@ pub struct OpenArgs {
     #[arg(long)]
     pub clear_cache: bool,
 
-    /// Verbose output
-    #[arg(short, long)]
-    pub verbose: bool,
+    /// Increase logging verbosity (`-v` = info, `-vv` = debug)
+    #[arg(short = 'v', long = "verbose", action = ArgAction::Count)]
+    pub verbose: u8,
 
     /// Show build information
     #[arg(long)]
@@ -281,7 +299,7 @@ mod tests {
     #[test]
     fn test_cli_open_subcommand() {
         let cli = Cli::try_parse_from(["openit", "open", "file.txt"]).unwrap();
-        match cli.command {
+        match cli.into_command() {
             Command::Open(open) => {
                 assert_eq!(open.target.as_deref(), Some("file.txt"));
                 assert_eq!(open.selector, SelectorKind::Auto);
@@ -294,7 +312,7 @@ mod tests {
     fn test_cli_named_selector_profile() {
         let cli =
             Cli::try_parse_from(["openit", "open", "--selector", "rofi", "file.txt"]).unwrap();
-        match cli.command {
+        match cli.into_command() {
             Command::Open(open) => {
                 assert_eq!(open.selector, SelectorKind::Named("rofi".to_string()));
             }
@@ -305,7 +323,7 @@ mod tests {
     #[test]
     fn test_cli_set_subcommand() {
         let cli = Cli::try_parse_from(["openit", "set", "text/plain", "helix.desktop"]).unwrap();
-        match cli.command {
+        match cli.into_command() {
             Command::Set(args) => {
                 assert_eq!(args.mime, "text/plain");
                 assert_eq!(args.handler, "helix.desktop");
@@ -316,9 +334,14 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_requires_subcommand() {
-        let cli = Cli::try_parse_from(["openit"]);
-        assert!(cli.is_err(), "CLI should require an explicit subcommand");
+    fn test_cli_default_open_command() {
+        let cli = Cli::try_parse_from(["openit", "file.txt"]).unwrap();
+        match cli.into_command() {
+            Command::Open(open) => {
+                assert_eq!(open.target.as_deref(), Some("file.txt"));
+            }
+            other => panic!("Expected open command, got {other:?}"),
+        }
     }
 
     #[test]

@@ -3,7 +3,7 @@ use crate::desktop_parser::DesktopFile;
 use crate::mime_associations::MimeAssociations;
 use crate::mime_pattern;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -130,9 +130,26 @@ impl ApplicationFinder {
 
         let xdg_associations = self.mime_associations.get_associations(mime_type);
 
+        let cache_entries: Vec<(&PathBuf, &DesktopFile)> = self.desktop_cache.iter().collect();
+        let mut suffix_map: HashMap<String, usize> = HashMap::new();
+
+        for (index, &(path, _)) in cache_entries.iter().enumerate() {
+            let path_string = path.to_string_lossy();
+            let path_str = path_string.as_ref();
+            suffix_map.entry(path_str.to_owned()).or_insert(index);
+
+            for (pos, ch) in path_str.char_indices() {
+                if (ch == '/' || ch == '\\') && pos + ch.len_utf8() < path_str.len() {
+                    let suffix = path_str[pos + ch.len_utf8()..].to_owned();
+                    suffix_map.entry(suffix).or_insert(index);
+                }
+            }
+        }
+
         // Add XDG associated applications first
         for (priority, desktop_id) in xdg_associations.iter().enumerate() {
-            if let Some((path, desktop_file)) = self.find_desktop_file(desktop_id) {
+            if let Some(&entry_index) = suffix_map.get(desktop_id.as_str()) {
+                let (path, desktop_file) = cache_entries[entry_index];
                 if seen.insert(desktop_id.clone()) {
                     if let Some(entry) = &desktop_file.main_entry {
                         let priority_i32 = i32::try_from(priority).unwrap_or(i32::MAX);
@@ -168,7 +185,7 @@ impl ApplicationFinder {
         }
 
         // Add other applications that support this MIME type
-        for (path, desktop_file) in self.desktop_cache.iter() {
+        for &(path, desktop_file) in &cache_entries {
             if let Some(entry) = &desktop_file.main_entry {
                 if entry
                     .mime_types

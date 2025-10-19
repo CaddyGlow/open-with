@@ -18,25 +18,31 @@ impl OpenCommand {
 
 impl CommandExecutor for OpenCommand {
     fn execute(self, _ctx: &CommandContext) -> Result<()> {
-        if self.args.build_info {
+        let args = self.args;
+
+        if let Err(message) = args.validate() {
+            anyhow::bail!(message);
+        }
+
+        if args.build_info {
             cli::show_build_info();
             return Ok(());
         }
 
-        if self.args.generate_config {
-            generate_config(&self.args)?;
+        if args.generate_config {
+            generate_config(&args)?;
             return Ok(());
         }
 
-        if self.args.verbose {
-            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-                .init();
-        } else {
-            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-                .init();
-        }
+        let level = match args.verbose {
+            0 => "warn",
+            1 => "info",
+            _ => "debug",
+        };
 
-        let app = OpenIt::new(self.args)?;
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level)).init();
+
+        let app = OpenIt::new(args)?;
         app.run()
     }
 }
