@@ -46,6 +46,13 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_mime_case() {
+        assert_eq!(normalize_mime_input("image/jpeg").unwrap(), "image/jpeg");
+        assert_eq!(normalize_mime_input("image/JPG").unwrap(), "image/jpeg");
+        assert_eq!(normalize_mime_input("image/png").unwrap(), "image/png");
+    }
+
+    #[test]
     fn preserves_wildcard() {
         assert_eq!(normalize_mime_input("image/*").unwrap(), "image/*");
     }
