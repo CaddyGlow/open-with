@@ -206,7 +206,7 @@ jobs:
             file
 
       - name: Download binary artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: openit-linux-x86_64
           path: ./
